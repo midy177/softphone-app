@@ -20,39 +20,159 @@ struct AudioDevices {
     outputs: Vec<AudioDevice>,
 }
 
+/// Linux-specific: Query PulseAudio/PipeWire for friendly device names.
+/// Returns a mapping from ALSA device identifiers to user-visible descriptions.
+#[cfg(target_os = "linux")]
+fn get_pulse_friendly_names() -> (std::collections::HashMap<String, String>, std::collections::HashMap<String, String>) {
+    use std::collections::HashMap;
+    use tracing::{info, warn};
+
+    let mut input_map = HashMap::new();
+    let mut output_map = HashMap::new();
+
+    // Try to connect to PulseAudio (also works with PipeWire via compatibility layer)
+    let pulse_result = pulsectl_rs::ControllerClient::new();
+
+    match pulse_result {
+        Ok(mut pulse) => {
+            info!("Connected to PulseAudio/PipeWire for friendly device names");
+
+            // Get input devices (sources)
+            if let Ok(sources) = pulse.list_sources() {
+                info!(count = sources.len(), "Found PulseAudio input sources");
+                for source in sources {
+                    // Extract ALSA card name from device properties
+                    let card_name = source.proplist.get("alsa.card_name")
+                        .or_else(|| source.proplist.get("device.product.name"))
+                        .map(|s| s.to_string());
+
+                    if let Some(card) = card_name {
+                        // Use the human-readable description from PulseAudio
+                        let friendly_name = source.description.clone().unwrap_or(source.name.clone());
+                        info!(card = %card, friendly_name = %friendly_name, "Mapped input device");
+                        input_map.insert(card, friendly_name);
+                    }
+                }
+            }
+
+            // Get output devices (sinks)
+            if let Ok(sinks) = pulse.list_sinks() {
+                info!(count = sinks.len(), "Found PulseAudio output sinks");
+                for sink in sinks {
+                    // Extract ALSA card name from device properties
+                    let card_name = sink.proplist.get("alsa.card_name")
+                        .or_else(|| sink.proplist.get("device.product.name"))
+                        .map(|s| s.to_string());
+
+                    if let Some(card) = card_name {
+                        // Use the human-readable description from PulseAudio
+                        let friendly_name = sink.description.clone().unwrap_or(sink.name.clone());
+                        info!(card = %card, friendly_name = %friendly_name, "Mapped output device");
+                        output_map.insert(card, friendly_name);
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            warn!(error = ?e, "Failed to connect to PulseAudio/PipeWire, will use ALSA names");
+        }
+    }
+
+    (input_map, output_map)
+}
+
+/// Try to extract a matchable identifier from ALSA device string (e.g., card name).
+#[cfg(target_os = "linux")]
+fn extract_alsa_card_name(alsa_desc: &str) -> Option<String> {
+    // ALSA descriptions often look like "HDA Intel PCH, ALC897 Analog"
+    // Extract the first part (card name)
+    alsa_desc.split(',').next().map(|s| s.trim().to_string())
+}
+
 #[tauri::command]
 fn enumerate_audio_devices() -> Result<AudioDevices, String> {
     use cpal::traits::{DeviceTrait, HostTrait};
+    use tracing::{info, warn};
+
+    info!("Enumerating audio devices");
+
+    // On Linux, get friendly names from PulseAudio/PipeWire
+    #[cfg(target_os = "linux")]
+    let (pulse_input_map, pulse_output_map) = get_pulse_friendly_names();
 
     let host = cpal::default_host();
+    info!(host_id = ?host.id(), "Using audio host");
+
     let devices = host
         .devices()
         .map_err(|e| format!("Failed to enumerate devices: {}", e))?;
 
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
+    let mut device_count = 0;
+    let mut skipped_count = 0;
 
     for device in devices {
+        device_count += 1;
+
         let id = match device.id() {
             Ok(id) => id.to_string(),
-            Err(_) => continue,
+            Err(e) => {
+                warn!(error = ?e, "Failed to get device ID");
+                continue;
+            }
         };
+
+        info!(device_id = %id, "Found device");
 
         // Extract the backend-local part of the ID (e.g. "alsa:plughw:CARD=PCH,DEV=0" → "plughw:CARD=PCH,DEV=0")
         let local_id = id.split_once(':').map(|(_, rest)| rest).unwrap_or(&id);
 
         // Only keep useful devices, skip ALSA virtual plugins
         if !is_useful_device(local_id) {
+            info!(device_id = %id, local_id = %local_id, "Skipping device (not useful)");
+            skipped_count += 1;
             continue;
         }
 
-        let desc = device
+        // Get the base description from cpal
+        let cpal_desc = device
             .description()
             .map(|d| d.to_string())
             .unwrap_or_else(|_| id.clone());
 
+        // On Linux, try to find a friendly name from PulseAudio
+        #[cfg(target_os = "linux")]
+        let desc = {
+            if let Some(card_name) = extract_alsa_card_name(&cpal_desc) {
+                // Try to find in PulseAudio mappings
+                let friendly = pulse_input_map.get(&card_name)
+                    .or_else(|| pulse_output_map.get(&card_name))
+                    .cloned();
+
+                if let Some(ref friendly_name) = friendly {
+                    info!(id = %id, cpal_desc = %cpal_desc, friendly_name = %friendly_name, "Using friendly name");
+                    friendly_name.clone()
+                } else {
+                    info!(id = %id, cpal_desc = %cpal_desc, "No friendly name found, using cpal description");
+                    cpal_desc
+                }
+            } else {
+                cpal_desc
+            }
+        };
+
+        // On macOS/Windows, use cpal description directly
+        #[cfg(not(target_os = "linux"))]
+        let desc = {
+            info!(id = %id, description = %cpal_desc, "Using cpal description");
+            cpal_desc
+        };
+
         let has_input = device.default_input_config().is_ok();
         let has_output = device.default_output_config().is_ok();
+
+        info!(device_id = %id, has_input = %has_input, has_output = %has_output, "Device capabilities");
 
         if has_input {
             inputs.push(AudioDevice {
@@ -68,24 +188,43 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
         }
     }
 
+    info!(
+        total_devices = device_count,
+        skipped = skipped_count,
+        input_count = inputs.len(),
+        output_count = outputs.len(),
+        "Device enumeration complete"
+    );
+
     Ok(AudioDevices { inputs, outputs })
 }
 
 /// Filter out ALSA virtual plugins and duplicates, only keep real/useful devices.
 /// Keeps: `default`, `plughw:CARD=<name>` (by card name, not number to deduplicate).
 /// Skips: pipewire, pulse, sysdefault (redundant with default), raw hw:, all virtual plugins.
+/// On non-Linux platforms, accepts all devices.
 fn is_useful_device(local_id: &str) -> bool {
-    if local_id == "default" {
+    // On macOS/Windows, accept all devices (no filtering needed)
+    #[cfg(not(target_os = "linux"))]
+    {
         return true;
     }
-    if let Some(rest) = local_id.strip_prefix("plughw:") {
-        // Only keep CARD=<name> form, skip CARD=<number> (duplicate)
-        if let Some(card_val) = rest.strip_prefix("CARD=") {
-            let card_name = card_val.split(&[',', ':']).next().unwrap_or("");
-            return !card_name.chars().all(|c| c.is_ascii_digit());
+
+    // On Linux, apply ALSA-specific filtering
+    #[cfg(target_os = "linux")]
+    {
+        if local_id == "default" {
+            return true;
         }
+        if let Some(rest) = local_id.strip_prefix("plughw:") {
+            // Only keep CARD=<name> form, skip CARD=<number> (duplicate)
+            if let Some(card_val) = rest.strip_prefix("CARD=") {
+                let card_name = card_val.split(&[',', ':']).next().unwrap_or("");
+                return !card_name.chars().all(|c| c.is_ascii_digit());
+            }
+        }
+        false
     }
-    false
 }
 
 // ── SIP commands ──

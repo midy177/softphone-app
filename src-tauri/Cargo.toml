@@ -36,3 +36,6 @@ bytes = "1"
 rubato = "0.16"
 ringbuf = "0.4"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+pulsectl-rs = "0.3"
+
