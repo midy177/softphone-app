@@ -83,7 +83,7 @@ const callStateLabel: Record<string, string> = {
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center p-4">
+  <div class="flex min-h-screen items-center justify-center">
     <!-- Incoming Call Dialog -->
     <IncomingCallDialog
       :open="callState === 'incoming' && !!incomingCall"
