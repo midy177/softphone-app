@@ -43,11 +43,18 @@ pub async fn process_dialog(
             }
             DialogState::Early(id, _resp) => {
                 debug!(dialog_id = %id, "Dialog entered Early state (ringing)");
-                let _ = app_handle.emit("sip://call-state", CallStatePayload {
-                    state: "ringing".to_string(),
-                    call_id: Some(id.to_string()),
-                    reason: None,
-                });
+
+                // Only emit ringing state for outbound calls (ClientInvite)
+                // For inbound calls (ServerInvite), we don't change the state
+                // because the frontend should already be in 'incoming' state
+                let dialog = dialog_layer.get_dialog(&id);
+                if let Some(Dialog::ClientInvite(_)) = dialog {
+                    let _ = app_handle.emit("sip://call-state", CallStatePayload {
+                        state: "ringing".to_string(),
+                        call_id: Some(id.to_string()),
+                        reason: None,
+                    });
+                }
             }
             DialogState::Terminated(id, reason) => {
                 info!(dialog_id = %id, reason = ?reason, "Dialog terminated");
