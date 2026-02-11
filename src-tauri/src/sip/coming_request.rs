@@ -51,6 +51,17 @@ pub async fn process_incoming_request(
             rsip::Method::Invite | rsip::Method::Ack => {
                 // Handle incoming INVITE
                 if tx.original.method == rsip::Method::Invite {
+                    // Check if we already have a pending call for this call_id
+                    let already_pending = {
+                        let pending = pending_incoming.lock().await;
+                        pending.contains_key(&call_id)
+                    };
+
+                    if already_pending {
+                        debug!(call_id = %call_id, "INVITE retransmission for pending call, ignoring");
+                        continue;
+                    }
+
                     // Extract caller information
                     let caller = tx.original.from_header()
                         .ok()

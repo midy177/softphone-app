@@ -56,7 +56,11 @@ async function setupListeners() {
 
 export function useSipCall() {
   const webrtc = useWebRTC()
-  setupListeners()
+
+  // Setup listeners immediately (async)
+  setupListeners().catch((e) => {
+    console.error('[Call] Failed to setup listeners:', e)
+  })
 
   async function dial(number: string) {
     callee.value = number
