@@ -19,8 +19,11 @@ const error = ref<string | null>(null)
 let unlistenCallState: (() => void) | null = null
 let unlistenIncoming: (() => void) | null = null
 
+let setupPromise: Promise<void> | null = null
+
 async function setupListeners() {
   if (!unlistenCallState) {
+    console.log('[Call] Setting up call-state listener...')
     unlistenCallState = await listen<{ state: string; call_id?: string; reason?: string }>(
       'sip://call-state',
       (event) => {
@@ -40,27 +43,34 @@ async function setupListeners() {
         }
       }
     )
+    console.log('[Call] call-state listener set up')
   }
 
   if (!unlistenIncoming) {
+    console.log('[Call] Setting up incoming-call listener...')
     unlistenIncoming = await listen<IncomingCallPayload>(
       'sip://incoming-call',
       (event) => {
-        console.debug('[Call] incoming-call event:', event.payload)
+        console.log('[Call] *** INCOMING CALL EVENT RECEIVED ***', event.payload)
         incomingCall.value = event.payload
         callState.value = 'incoming'
+        console.log('[Call] State updated:', { callState: callState.value, incomingCall: incomingCall.value })
       }
     )
+    console.log('[Call] incoming-call listener set up')
   }
 }
 
 export function useSipCall() {
   const webrtc = useWebRTC()
 
-  // Setup listeners immediately (async)
-  setupListeners().catch((e) => {
-    console.error('[Call] Failed to setup listeners:', e)
-  })
+  // Setup listeners immediately (async) - ensure it only runs once
+  if (!setupPromise) {
+    setupPromise = setupListeners().catch((e) => {
+      console.error('[Call] Failed to setup listeners:', e)
+      setupPromise = null // Reset on error so it can retry
+    })
+  }
 
   async function dial(number: string) {
     callee.value = number
