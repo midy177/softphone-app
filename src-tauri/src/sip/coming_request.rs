@@ -86,6 +86,15 @@ pub async fn process_incoming_request(
 
                     info!(call_id = %call_id, "Created server dialog, notifying frontend");
 
+                    // Send 180 Ringing to keep dialog alive while waiting for user action
+                    if let Err(e) = dialog.ringing(None, None) {
+                        warn!(call_id = %call_id, error = ?e, "Failed to send 180 Ringing");
+                        tx.reply(rsip::StatusCode::ServerInternalError).await?;
+                        continue;
+                    }
+
+                    info!(call_id = %call_id, "Sent 180 Ringing, waiting for user action");
+
                     // Store pending call
                     {
                         let mut pending = pending_incoming.lock().await;

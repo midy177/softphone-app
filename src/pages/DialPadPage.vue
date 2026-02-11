@@ -110,7 +110,7 @@ const callStateLabel: Record<string, string> = {
 
       <CardContent class="space-y-4">
         <!-- Device selectors -->
-        <div class="flex gap-2">
+        <div class="flex gap-2 items-center">
           <DeviceSelector
             label="麦克风"
             :devices="webrtc.microphones.value"
@@ -123,15 +123,15 @@ const callStateLabel: Record<string, string> = {
             :model-value="webrtc.selectedSpeaker.value"
             @update:model-value="webrtc.setSpeaker($event)"
           />
+          <Button variant="ghost" size="sm" class="h-8 w-8 p-0 shrink-0" @click="webrtc.enumerateDevices()">
+            <RefreshCw class="h-4 w-4" />
+          </Button>
         </div>
         <div v-if="webrtc.deviceError.value" class="text-xs text-destructive">
           {{ webrtc.deviceError.value }}
         </div>
-        <div v-if="!webrtc.microphones.value.length" class="flex items-center gap-2">
-          <span class="text-xs text-muted-foreground">未检测到设备</span>
-          <Button variant="ghost" size="sm" class="h-6 w-6 p-0" @click="webrtc.enumerateDevices()">
-            <RefreshCw class="h-3 w-3" />
-          </Button>
+        <div v-if="!webrtc.microphones.value.length" class="text-xs text-muted-foreground">
+          未检测到设备
         </div>
 
         <Separator />
