@@ -25,48 +25,49 @@ struct AudioDevices {
 #[cfg(target_os = "linux")]
 fn get_pulse_friendly_names() -> (std::collections::HashMap<String, String>, std::collections::HashMap<String, String>) {
     use std::collections::HashMap;
+    use pulsectl::controllers::{SinkController, SourceController, DeviceControl};
     use tracing::{info, warn};
 
     let mut input_map = HashMap::new();
     let mut output_map = HashMap::new();
 
-    // Try to connect to PulseAudio (also works with PipeWire via compatibility layer)
-    let pulse_result = pulsectl_rs::ControllerClient::new();
-
-    match pulse_result {
-        Ok(mut pulse) => {
-            info!("Connected to PulseAudio/PipeWire for friendly device names");
-
-            // Get input devices (sources)
-            if let Ok(sources) = pulse.list_sources() {
+    // Get input devices (sources) via SourceController
+    match SourceController::create() {
+        Ok(mut source_ctrl) => {
+            if let Ok(sources) = source_ctrl.list_devices() {
                 info!(count = sources.len(), "Found PulseAudio input sources");
                 for source in sources {
-                    // Extract ALSA card name from device properties
-                    let card_name = source.proplist.get("alsa.card_name")
-                        .or_else(|| source.proplist.get("device.product.name"))
-                        .map(|s| s.to_string());
+                    let card_name = source.proplist.get_str("alsa.card_name")
+                        .or_else(|| source.proplist.get_str("device.product.name"));
 
                     if let Some(card) = card_name {
-                        // Use the human-readable description from PulseAudio
-                        let friendly_name = source.description.clone().unwrap_or(source.name.clone());
+                        let friendly_name = source.description.unwrap_or_else(|| {
+                            source.name.unwrap_or_default()
+                        });
                         info!(card = %card, friendly_name = %friendly_name, "Mapped input device");
                         input_map.insert(card, friendly_name);
                     }
                 }
             }
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to connect to PulseAudio SourceController");
+        }
+    }
 
-            // Get output devices (sinks)
-            if let Ok(sinks) = pulse.list_sinks() {
+    // Get output devices (sinks) via SinkController
+    match SinkController::create() {
+        Ok(mut sink_ctrl) => {
+            if let Ok(sinks) = sink_ctrl.list_devices() {
                 info!(count = sinks.len(), "Found PulseAudio output sinks");
                 for sink in sinks {
-                    // Extract ALSA card name from device properties
-                    let card_name = sink.proplist.get("alsa.card_name")
-                        .or_else(|| sink.proplist.get("device.product.name"))
-                        .map(|s| s.to_string());
+                    let card_name = sink.proplist.get_str("alsa.card_name")
+                        .or_else(|| sink.proplist.get_str("device.product.name"));
 
                     if let Some(card) = card_name {
-                        // Use the human-readable description from PulseAudio
-                        let friendly_name = sink.description.clone().unwrap_or(sink.name.clone());
+                        let friendly_name = sink.description.unwrap_or_else(|| {
+                            sink.name.unwrap_or_default()
+                        });
                         info!(card = %card, friendly_name = %friendly_name, "Mapped output device");
                         output_map.insert(card, friendly_name);
                     }
@@ -74,7 +75,7 @@ fn get_pulse_friendly_names() -> (std::collections::HashMap<String, String>, std
             }
         }
         Err(e) => {
-            warn!(error = ?e, "Failed to connect to PulseAudio/PipeWire, will use ALSA names");
+            warn!(error = %e, "Failed to connect to PulseAudio SinkController");
         }
     }
 
@@ -203,7 +204,7 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
 /// Keeps: `default`, `plughw:CARD=<name>` (by card name, not number to deduplicate).
 /// Skips: pipewire, pulse, sysdefault (redundant with default), raw hw:, all virtual plugins.
 /// On non-Linux platforms, accepts all devices.
-fn is_useful_device(_local_id: &str) -> bool {
+fn is_useful_device(local_id: &str) -> bool {
     // On macOS/Windows, accept all devices (no filtering needed)
     #[cfg(not(target_os = "linux"))]
     {
