@@ -36,6 +36,7 @@ bytes = "1"
 rubato = "1.0.1"
 audioadapter-buffers = "2.0"
 ringbuf = "0.4"
+audio-codec = { version = "0.3", default-features = false, features = ["opus"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 pulsectl-rs = "0.3.2"

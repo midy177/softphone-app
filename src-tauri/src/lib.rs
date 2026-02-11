@@ -324,6 +324,46 @@ async fn sip_hangup(state: State<'_, SipAppState>) -> Result<(), String> {
     })
 }
 
+#[tauri::command]
+async fn sip_answer_call(
+    state: State<'_, SipAppState>,
+    call_id: String,
+) -> Result<(), String> {
+    let input_device = state.input_device.lock().await.clone();
+    let output_device = state.output_device.lock().await.clone();
+
+    let handle_guard = state.handle.lock().await;
+    let handle = handle_guard
+        .as_ref()
+        .ok_or_else(|| "Not registered".to_string())?;
+
+    sip::handle_answer_call(handle, call_id, input_device, output_device)
+        .await
+        .map_err(|e| {
+            error!(error = ?e, "Answer call failed");
+            format!("Answer failed: {}", e)
+        })
+}
+
+#[tauri::command]
+async fn sip_reject_call(
+    state: State<'_, SipAppState>,
+    call_id: String,
+    reason: Option<u16>,
+) -> Result<(), String> {
+    let handle_guard = state.handle.lock().await;
+    let handle = handle_guard
+        .as_ref()
+        .ok_or_else(|| "Not registered".to_string())?;
+
+    sip::handle_reject_call(handle, call_id, reason)
+        .await
+        .map_err(|e| {
+            error!(error = ?e, "Reject call failed");
+            format!("Reject failed: {}", e)
+        })
+}
+
 // ── Audio device commands ──
 
 #[tauri::command]
@@ -377,6 +417,8 @@ pub fn run() {
             sip_unregister,
             sip_make_call,
             sip_hangup,
+            sip_answer_call,
+            sip_reject_call,
             set_input_device,
             set_output_device,
             toggle_mic_mute,

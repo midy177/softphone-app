@@ -1,158 +1,70 @@
-/// G.711 PCMU (μ-law) and PCMA (A-law) encoder/decoder per ITU-T G.711.
+/// Codec support using audio-codec crate.
+///
+/// Directly uses audio-codec's CodecType to support all available codecs:
+/// PCMU, PCMA, G722, G729, Opus, etc.
 
-const ULAW_BIAS: i16 = 0x84;
-const ULAW_CLIP: i16 = 32635;
+pub use audio_codec::CodecType;
+use audio_codec::{create_decoder, create_encoder};
 
-// ── PCMU (μ-law) ──
-
-fn linear_to_ulaw(mut sample: i16) -> u8 {
-    let sign: u8 = if sample < 0 {
-        sample = -sample;
-        0x80
-    } else {
-        0
-    };
-
-    if sample > ULAW_CLIP {
-        sample = ULAW_CLIP;
-    }
-    sample += ULAW_BIAS;
-
-    let exponent = match sample {
-        s if s <= 0x00FF => 0u8,
-        s if s <= 0x01FF => 1,
-        s if s <= 0x03FF => 2,
-        s if s <= 0x07FF => 3,
-        s if s <= 0x0FFF => 4,
-        s if s <= 0x1FFF => 5,
-        s if s <= 0x3FFF => 6,
-        _ => 7,
-    };
-
-    let mantissa = ((sample >> (exponent + 3)) & 0x0F) as u8;
-    !(sign | (exponent << 4) | mantissa)
-}
-
-fn ulaw_to_linear(sample: u8) -> i16 {
-    let sample = !sample;
-    let sign = sample & 0x80;
-    let exponent = ((sample >> 4) & 0x07) as i16;
-    let mantissa = (sample & 0x0F) as i16;
-
-    let mut magnitude = ((mantissa << 1) | 0x21) << (exponent + 2);
-    magnitude -= ULAW_BIAS;
-
-    if sign != 0 {
-        -magnitude
-    } else {
-        magnitude
-    }
-}
-
-pub fn pcmu_encode(pcm: &[i16]) -> Vec<u8> {
-    pcm.iter().map(|&s| linear_to_ulaw(s)).collect()
-}
-
-pub fn pcmu_decode(ulaw: &[u8]) -> Vec<i16> {
-    ulaw.iter().map(|&s| ulaw_to_linear(s)).collect()
-}
-
-// ── PCMA (A-law) ──
-
-fn linear_to_alaw(mut sample: i16) -> u8 {
-    let sign_mask: u8 = if sample >= 0 { 0xD5 } else { 0x55 };
-    if sample < 0 {
-        sample = -sample;
-    }
-    if sample > 32767 {
-        sample = 32767;
-    }
-
-    let (exponent, mantissa) = if sample < 256 {
-        (0u8, (sample >> 4) as u8)
-    } else {
-        let exp = match sample {
-            s if s < 512 => 1u8,
-            s if s < 1024 => 2,
-            s if s < 2048 => 3,
-            s if s < 4096 => 4,
-            s if s < 8192 => 5,
-            s if s < 16384 => 6,
-            _ => 7,
-        };
-        (exp, (sample >> (exp + 3)) as u8 & 0x0F)
-    };
-
-    (sign_mask ^ ((exponent << 4) | mantissa)) as u8
-}
-
-fn alaw_to_linear(alaw: u8) -> i16 {
-    let val = alaw ^ 0xD5;
-    let sign = val & 0x80;
-    let exponent = ((val >> 4) & 0x07) as i16;
-    let mantissa = (val & 0x0F) as i16;
-
-    let magnitude = if exponent == 0 {
-        (mantissa << 4) | 0x08
-    } else {
-        ((mantissa << 1) | 0x21) << (exponent + 2)
-    };
-
-    if sign != 0 {
-        magnitude
-    } else {
-        -magnitude
-    }
-}
-
-pub fn pcma_encode(pcm: &[i16]) -> Vec<u8> {
-    pcm.iter().map(|&s| linear_to_alaw(s)).collect()
-}
-
-pub fn pcma_decode(alaw: &[u8]) -> Vec<i16> {
-    alaw.iter().map(|&s| alaw_to_linear(s)).collect()
-}
-
-// ── Codec type for negotiated codec ──
-
-/// Supported codec types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CodecType {
-    Pcmu, // G.711 μ-law, PT=0
-    Pcma, // G.711 A-law, PT=8
-}
-
-impl CodecType {
+/// Extension trait for CodecType to add helper methods
+pub trait CodecTypeExt {
     /// Determine codec from RTP payload type
-    pub fn from_payload_type(pt: u8) -> Option<Self> {
+    fn from_payload_type(pt: u8) -> Option<CodecType>;
+
+    /// Get RTP payload type for this codec
+    fn to_payload_type(&self) -> u8;
+
+    /// Get default clock rate for this codec
+    fn default_clock_rate(&self) -> u32;
+
+    /// Encode PCM samples
+    fn encode(&self, pcm: &[i16]) -> Vec<u8>;
+
+    /// Decode encoded data to PCM samples
+    fn decode(&self, data: &[u8]) -> Vec<i16>;
+}
+
+impl CodecTypeExt for CodecType {
+    fn from_payload_type(pt: u8) -> Option<CodecType> {
         match pt {
-            0 => Some(Self::Pcmu),
-            8 => Some(Self::Pcma),
+            0 => Some(CodecType::PCMU),
+            8 => Some(CodecType::PCMA),
+            9 => Some(CodecType::G722),
+            18 => Some(CodecType::G729),
+            111 => Some(CodecType::Opus), // Common dynamic PT for Opus
             _ => None,
         }
     }
 
-    pub fn encode(&self, pcm: &[i16]) -> Vec<u8> {
+    fn to_payload_type(&self) -> u8 {
         match self {
-            Self::Pcmu => pcmu_encode(pcm),
-            Self::Pcma => pcma_encode(pcm),
+            CodecType::PCMU => 0,
+            CodecType::PCMA => 8,
+            CodecType::G722 => 9,
+            CodecType::G729 => 18,
+            CodecType::Opus => 111,
+            CodecType::TelephoneEvent => 101, // RFC 4733
         }
     }
 
-    pub fn decode(&self, data: &[u8]) -> Vec<i16> {
+    fn default_clock_rate(&self) -> u32 {
         match self {
-            Self::Pcmu => pcmu_decode(data),
-            Self::Pcma => pcma_decode(data),
+            CodecType::PCMU | CodecType::PCMA => 8000,
+            CodecType::G722 => 16000,
+            CodecType::G729 => 8000,
+            CodecType::Opus => 48000,
+            CodecType::TelephoneEvent => 8000,
         }
     }
-}
 
-impl std::fmt::Display for CodecType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Pcmu => write!(f, "PCMU"),
-            Self::Pcma => write!(f, "PCMA"),
-        }
+    fn encode(&self, pcm: &[i16]) -> Vec<u8> {
+        let mut encoder = create_encoder(*self);
+        encoder.encode(pcm)
+    }
+
+    fn decode(&self, data: &[u8]) -> Vec<i16> {
+        let mut decoder = create_decoder(*self);
+        decoder.decode(data)
     }
 }
 
@@ -175,7 +87,7 @@ impl NegotiatedCodec {
 impl Default for NegotiatedCodec {
     fn default() -> Self {
         Self {
-            codec: CodecType::Pcmu,
+            codec: CodecType::PCMU,
             payload_type: 0,
             clock_rate: 8000,
             ptime_ms: 20,
@@ -193,7 +105,7 @@ pub fn parse_negotiated_codec(sdp: &str) -> NegotiatedCodec {
     for line in sdp.lines() {
         let line = line.trim();
 
-        // m=audio 5004 RTP/AVP 0 8
+        // m=audio 5004 RTP/AVP 0 8 111
         if line.starts_with("m=audio") {
             in_audio_section = true;
             // First format in m= line is the preferred codec
@@ -211,7 +123,7 @@ pub fn parse_negotiated_codec(sdp: &str) -> NegotiatedCodec {
             continue;
         }
 
-        // a=rtpmap:0 PCMU/8000
+        // a=rtpmap:0 PCMU/8000 or a=rtpmap:111 opus/48000/2
         if line.starts_with("a=rtpmap:") {
             if let Some(rest) = line.strip_prefix("a=rtpmap:") {
                 let parts: Vec<&str> = rest.splitn(2, ' ').collect();
@@ -220,8 +132,11 @@ pub fn parse_negotiated_codec(sdp: &str) -> NegotiatedCodec {
                         let codec_parts: Vec<&str> = parts[1].split('/').collect();
                         if let Some(&codec_name) = codec_parts.first() {
                             let codec = match codec_name.to_uppercase().as_str() {
-                                "PCMU" => Some(CodecType::Pcmu),
-                                "PCMA" => Some(CodecType::Pcma),
+                                "PCMU" => Some(CodecType::PCMU),
+                                "PCMA" => Some(CodecType::PCMA),
+                                "G722" => Some(CodecType::G722),
+                                "G729" => Some(CodecType::G729),
+                                "OPUS" => Some(CodecType::Opus),
                                 _ => None,
                             };
                             // Only use this if it matches the preferred PT from m= line
@@ -257,10 +172,10 @@ pub fn parse_negotiated_codec(sdp: &str) -> NegotiatedCodec {
     // If no rtpmap matched, determine from PT alone
     if media_pt.is_some() && result.payload_type != media_pt.unwrap() {
         if let Some(pt) = media_pt {
-            if let Some(c) = CodecType::from_payload_type(pt) {
+            if let Some(c) = <CodecType as CodecTypeExt>::from_payload_type(pt) {
                 result.codec = c;
                 result.payload_type = pt;
-                result.clock_rate = 8000; // G.711 is always 8kHz
+                result.clock_rate = c.default_clock_rate();
             }
         }
     }
@@ -275,8 +190,8 @@ mod tests {
     #[test]
     fn roundtrip_pcmu_silence() {
         let pcm = vec![0i16; 160];
-        let encoded = pcmu_encode(&pcm);
-        let decoded = pcmu_decode(&encoded);
+        let encoded = CodecType::PCMU.encode(&pcm);
+        let decoded = CodecType::PCMU.decode(&encoded);
         for s in &decoded {
             assert!(s.abs() < 10, "expected near-zero, got {}", s);
         }
@@ -285,8 +200,8 @@ mod tests {
     #[test]
     fn roundtrip_pcma_silence() {
         let pcm = vec![0i16; 160];
-        let encoded = pcma_encode(&pcm);
-        let decoded = pcma_decode(&encoded);
+        let encoded = CodecType::PCMA.encode(&pcm);
+        let decoded = CodecType::PCMA.decode(&encoded);
         for s in &decoded {
             assert!(s.abs() < 16, "expected near-zero, got {}", s);
         }
@@ -296,7 +211,7 @@ mod tests {
     fn parse_sdp_pcmu_default() {
         let sdp = "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\nm=audio 5004 RTP/AVP 0\r\na=rtpmap:0 PCMU/8000\r\n";
         let codec = parse_negotiated_codec(sdp);
-        assert_eq!(codec.codec, CodecType::Pcmu);
+        assert_eq!(codec.codec, CodecType::PCMU);
         assert_eq!(codec.payload_type, 0);
         assert_eq!(codec.clock_rate, 8000);
         assert_eq!(codec.ptime_ms, 20); // default
@@ -306,9 +221,51 @@ mod tests {
     fn parse_sdp_pcma_with_ptime() {
         let sdp = "v=0\r\nm=audio 5004 RTP/AVP 8\r\na=rtpmap:8 PCMA/8000\r\na=ptime:30\r\n";
         let codec = parse_negotiated_codec(sdp);
-        assert_eq!(codec.codec, CodecType::Pcma);
+        assert_eq!(codec.codec, CodecType::PCMA);
         assert_eq!(codec.payload_type, 8);
         assert_eq!(codec.ptime_ms, 30);
         assert_eq!(codec.frame_samples(), 240); // 8000 * 30 / 1000
+    }
+
+    #[test]
+    fn parse_sdp_opus() {
+        let sdp = "v=0\r\nm=audio 5004 RTP/AVP 111\r\na=rtpmap:111 opus/48000/2\r\na=ptime:20\r\n";
+        let codec = parse_negotiated_codec(sdp);
+        assert_eq!(codec.codec, CodecType::Opus);
+        assert_eq!(codec.payload_type, 111);
+        assert_eq!(codec.clock_rate, 48000);
+        assert_eq!(codec.ptime_ms, 20);
+        assert_eq!(codec.frame_samples(), 960); // 48000 * 20 / 1000
+    }
+
+    #[test]
+    fn parse_sdp_g722() {
+        let sdp = "v=0\r\nm=audio 5004 RTP/AVP 9\r\na=rtpmap:9 G722/16000\r\na=ptime:20\r\n";
+        let codec = parse_negotiated_codec(sdp);
+        assert_eq!(codec.codec, CodecType::G722);
+        assert_eq!(codec.payload_type, 9);
+        assert_eq!(codec.clock_rate, 16000);
+        assert_eq!(codec.ptime_ms, 20);
+        assert_eq!(codec.frame_samples(), 320); // 16000 * 20 / 1000
+    }
+
+    #[test]
+    fn test_codec_extensions() {
+        // Test from_payload_type
+        assert_eq!(<CodecType as CodecTypeExt>::from_payload_type(0), Some(CodecType::PCMU));
+        assert_eq!(<CodecType as CodecTypeExt>::from_payload_type(8), Some(CodecType::PCMA));
+        assert_eq!(<CodecType as CodecTypeExt>::from_payload_type(9), Some(CodecType::G722));
+        assert_eq!(<CodecType as CodecTypeExt>::from_payload_type(111), Some(CodecType::Opus));
+
+        // Test to_payload_type
+        assert_eq!(CodecType::PCMU.to_payload_type(), 0);
+        assert_eq!(CodecType::PCMA.to_payload_type(), 8);
+        assert_eq!(CodecType::G722.to_payload_type(), 9);
+        assert_eq!(CodecType::Opus.to_payload_type(), 111);
+
+        // Test default_clock_rate
+        assert_eq!(CodecType::PCMU.default_clock_rate(), 8000);
+        assert_eq!(CodecType::G722.default_clock_rate(), 16000);
+        assert_eq!(CodecType::Opus.default_clock_rate(), 48000);
     }
 }

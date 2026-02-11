@@ -24,9 +24,9 @@ pub async fn process_dialog(
                     }
                 };
                 match dialog {
-                    Dialog::ServerInvite(d) => {
-                        info!(dialog_id = %id, "Rejecting server invite, replying 486 Busy Here");
-                        d.reject(Some(rsip::StatusCode::BusyHere), Some("Busy here".into())).ok();
+                    Dialog::ServerInvite(_) => {
+                        // Don't auto-reject - wait for user action (accept/reject)
+                        debug!(dialog_id = %id, "Server invite dialog created, waiting for user action");
                     }
                     Dialog::ClientInvite(_) => {
                         debug!(dialog_id = %id, "Client invite dialog calling");

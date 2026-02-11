@@ -110,11 +110,11 @@ function validate(): boolean {
   }
 
   if (!username.value.trim()) {
-    e.username = '请输入用户名'
+    e.username = '请输入分机号'
   }
 
   if (!password.value) {
-    e.password = '请输入密码'
+    e.password = '请输入注册码'
   }
 
   if (showProxy.value && proxyHost.value.trim()) {
@@ -210,7 +210,7 @@ async function handleRegister() {
           </div>
 
           <div class="space-y-2">
-            <Label for="username">用户名</Label>
+            <Label for="username">分机号</Label>
             <Input
               id="username"
               v-model="username"
@@ -221,7 +221,7 @@ async function handleRegister() {
           </div>
 
           <div class="space-y-2">
-            <Label for="password">密码</Label>
+            <Label for="password">注册码</Label>
             <Input
               id="password"
               v-model="password"

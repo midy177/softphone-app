@@ -27,13 +27,16 @@ impl WebRtcSession {
         input_device: Option<&str>,
         output_device: Option<&str>,
     ) -> Result<(Self, String), String> {
-        // Configure for SIP/RTP mode with PCMU codec
+        // Configure for SIP/RTP mode with all supported codecs
         let config = RtcConfiguration {
             transport_mode: TransportMode::Rtp,
             media_capabilities: Some(MediaCapabilities {
                 audio: vec![
+                    AudioCapability::opus(),
+                    AudioCapability::g722(),
                     AudioCapability::pcmu(),
                     AudioCapability::pcma(),
+                    AudioCapability::g729(),
                     AudioCapability::telephone_event(),
                 ],
                 video: vec![],
@@ -82,6 +85,132 @@ impl WebRtcSession {
         Ok((session, sdp_string))
     }
 
+    /// Create a new inbound session from an SDP offer. Returns `(session, sdp_answer_string)`.
+    ///
+    /// This sets up:
+    /// - Parse remote SDP offer to determine negotiated codec
+    /// - PeerConnection in RTP mode (no ICE/DTLS)
+    /// - Audio track with negotiated codec
+    /// - AudioBridge (capture NOT started yet — waits for connection)
+    pub async fn new_inbound(
+        sdp_offer: &str,
+        input_device: Option<&str>,
+        output_device: Option<&str>,
+    ) -> Result<(Self, String), String> {
+        // Parse negotiated codec from SDP offer
+        let negotiated = codec::parse_negotiated_codec(sdp_offer);
+        info!(
+            codec = ?negotiated.codec,
+            pt = negotiated.payload_type,
+            rate = negotiated.clock_rate,
+            ptime = negotiated.ptime_ms,
+            "Parsed codec from incoming SDP offer"
+        );
+
+        // Configure for SIP/RTP mode with all supported codecs
+        let config = RtcConfiguration {
+            transport_mode: TransportMode::Rtp,
+            media_capabilities: Some(MediaCapabilities {
+                audio: vec![
+                    AudioCapability::opus(),
+                    AudioCapability::g722(),
+                    AudioCapability::pcmu(),
+                    AudioCapability::pcma(),
+                    AudioCapability::g729(),
+                    AudioCapability::telephone_event(),
+                ],
+                video: vec![],
+                application: None,
+            }),
+            enable_latching: true,
+            ..Default::default()
+        };
+
+        let pc = PeerConnection::new(config);
+
+        // Create audio bridge (validates devices, creates track, but does NOT start capture)
+        let (audio_bridge, send_track) =
+            AudioBridge::new(input_device, output_device)?;
+
+        // Add the capture track to PeerConnection with negotiated codec parameters
+        let params = RtpCodecParameters {
+            payload_type: negotiated.payload_type,
+            clock_rate: negotiated.clock_rate,
+            channels: 1,
+        };
+        pc.add_track(send_track, params)
+            .map_err(|e| format!("Failed to add audio track: {}", e))?;
+
+        // Parse and set remote description (offer)
+        let offer = rustrtc::SessionDescription::parse(rustrtc::SdpType::Offer, sdp_offer)
+            .map_err(|e| format!("Failed to parse SDP offer: {}", e))?;
+
+        pc.set_remote_description(offer)
+            .await
+            .map_err(|e| format!("Failed to set remote description: {}", e))?;
+
+        // Create SDP answer
+        let answer = pc
+            .create_answer()
+            .await
+            .map_err(|e| format!("Failed to create SDP answer: {}", e))?;
+
+        let sdp_answer_string = answer.to_sdp_string();
+        debug!(sdp_len = sdp_answer_string.len(), "SDP answer created");
+
+        pc.set_local_description(answer)
+            .map_err(|e| format!("Failed to set local description: {}", e))?;
+
+        let session = WebRtcSession { pc, audio_bridge };
+
+        info!("WebRTC inbound session created");
+        Ok((session, sdp_answer_string))
+    }
+
+    /// Start media for an inbound session (after SDP negotiation complete).
+    /// This should be called after new_inbound and after sending the SDP answer.
+    pub async fn start_inbound_media(
+        &mut self,
+        sdp_offer: &str,
+        output_device: Option<&str>,
+    ) -> Result<(), String> {
+        // Parse negotiated codec from SDP offer
+        let negotiated = codec::parse_negotiated_codec(sdp_offer);
+
+        info!("Starting inbound media, waiting for connection...");
+
+        // Wait for connection (with timeout)
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.pc.wait_for_connected(),
+        )
+        .await
+        {
+            Ok(Ok(_)) => info!("RTP connection established"),
+            Ok(Err(e)) => return Err(format!("Connection failed: {}", e)),
+            Err(_) => return Err("Connection timed out".to_string()),
+        }
+
+        // Start capture with negotiated codec
+        self.audio_bridge.start_capture(&negotiated)?;
+
+        // Start playback from remote track with negotiated codec
+        let transceivers = self.pc.get_transceivers();
+        for t in &transceivers {
+            if t.kind() == MediaKind::Audio {
+                if let Some(receiver) = t.receiver() {
+                    let remote_track = receiver.track();
+                    self.audio_bridge
+                        .start_playback(output_device, remote_track, &negotiated)?;
+                    info!("Audio playback started");
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Apply the remote SDP answer and start audio capture/playback
     /// using the negotiated codec parameters.
     pub async fn apply_answer(
@@ -92,7 +221,7 @@ impl WebRtcSession {
         // Parse negotiated codec from SDP answer
         let negotiated = codec::parse_negotiated_codec(sdp_answer);
         info!(
-            codec = %negotiated.codec,
+            codec = ?negotiated.codec,
             pt = negotiated.payload_type,
             rate = negotiated.clock_rate,
             ptime = negotiated.ptime_ms,

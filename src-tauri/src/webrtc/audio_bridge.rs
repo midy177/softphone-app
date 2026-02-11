@@ -12,7 +12,7 @@ use rustrtc::media::MediaStreamTrack;
 use tokio::sync::Notify;
 use tracing::{debug, error, info, warn};
 
-use super::codec::NegotiatedCodec;
+use super::codec::{CodecTypeExt, NegotiatedCodec};
 
 /// AudioBridge connects cpal audio I/O to rustrtc media tracks.
 pub struct AudioBridge {
@@ -92,7 +92,7 @@ impl AudioBridge {
         )?;
 
         self.capture_stream = Some(capture_stream);
-        info!(codec = %negotiated.codec, ptime = negotiated.ptime_ms, "Capture started");
+        info!(codec = ?negotiated.codec, ptime = negotiated.ptime_ms, "Capture started");
         Ok(())
     }
 
@@ -120,7 +120,7 @@ impl AudioBridge {
         )?;
 
         self.playback_stream = Some(playback_stream);
-        info!(codec = %negotiated.codec, ptime = negotiated.ptime_ms, "Playback started");
+        info!(codec = ?negotiated.codec, ptime = negotiated.ptime_ms, "Playback started");
         Ok(())
     }
 

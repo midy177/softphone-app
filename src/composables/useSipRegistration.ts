@@ -2,11 +2,40 @@ import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 
+const EXTENSION_STORAGE_KEY = 'sip-extension'
+
 const isRegistered = ref(false)
 const isRegistering = ref(false)
 const error = ref<string | null>(null)
+const currentExtension = ref<string | null>(loadExtension())
 
 let unlisten: (() => void) | null = null
+
+function loadExtension(): string | null {
+  try {
+    return localStorage.getItem(EXTENSION_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function saveExtension(extension: string) {
+  try {
+    localStorage.setItem(EXTENSION_STORAGE_KEY, extension)
+    currentExtension.value = extension
+  } catch (e) {
+    console.error('Failed to save extension:', e)
+  }
+}
+
+function clearExtension() {
+  try {
+    localStorage.removeItem(EXTENSION_STORAGE_KEY)
+    currentExtension.value = null
+  } catch (e) {
+    console.error('Failed to clear extension:', e)
+  }
+}
 
 async function setupListener() {
   if (unlisten) return
@@ -54,6 +83,7 @@ export function useSipRegistration() {
         outboundProxy: outboundProxy || null,
       })
       isRegistered.value = true
+      saveExtension(username) // 保存分机号
       console.debug('[SIP] Registration successful')
     } catch (e) {
       error.value = String(e)
@@ -74,6 +104,7 @@ export function useSipRegistration() {
       console.error('[SIP] Unregister failed:', e)
     } finally {
       isRegistered.value = false
+      clearExtension() // 清除分机号
     }
   }
 
@@ -81,6 +112,7 @@ export function useSipRegistration() {
     isRegistered,
     isRegistering,
     error,
+    currentExtension,
     checkRegistered,
     register,
     unregister,

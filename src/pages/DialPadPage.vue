@@ -10,12 +10,13 @@ import { Separator } from '@/components/ui/separator'
 import DialPad from '@/components/DialPad.vue'
 import CallControls from '@/components/CallControls.vue'
 import DeviceSelector from '@/components/DeviceSelector.vue'
+import IncomingCallDialog from '@/components/IncomingCallDialog.vue'
 import { Phone, LogOut, RefreshCw } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 
 const router = useRouter()
-const { isRegistered, unregister } = useSipRegistration()
-const { callState, dial, hangup, webrtc } = useSipCall()
+const { isRegistered, currentExtension, unregister } = useSipRegistration()
+const { callState, incomingCall, dial, hangup, answerCall, rejectCall, webrtc } = useSipCall()
 
 const phoneNumber = ref('')
 
@@ -55,23 +56,51 @@ async function handleLogout() {
   await router.push('/')
 }
 
+async function handleAnswer() {
+  try {
+    await answerCall()
+  } catch (e) {
+    toast.error(`接听失败: ${e}`)
+  }
+}
+
+async function handleReject() {
+  try {
+    await rejectCall()
+  } catch (e) {
+    toast.error(`拒绝失败: ${e}`)
+  }
+}
+
 const callStateLabel: Record<string, string> = {
   idle: '空闲',
   calling: '呼叫中...',
   ringing: '对方响铃中...',
   connected: '通话中',
+  incoming: '来电中...',
   ended: '通话结束',
 }
 </script>
 
 <template>
   <div class="flex min-h-screen items-center justify-center p-4">
+    <!-- Incoming Call Dialog -->
+    <IncomingCallDialog
+      :open="callState === 'incoming' && !!incomingCall"
+      :caller="incomingCall?.caller || ''"
+      :callee="incomingCall?.callee"
+      @accept="handleAnswer"
+      @reject="handleReject"
+    />
+
     <Card class="w-full max-w-sm">
       <CardHeader class="pb-3">
         <div class="flex items-center justify-between">
           <CardTitle class="text-lg">拨号面板</CardTitle>
           <div class="flex items-center gap-2">
-            <span class="text-xs text-green-600">● 已注册</span>
+            <span class="text-xs text-green-600">
+              ● 已注册{{ currentExtension ? ` (${currentExtension})` : '' }}
+            </span>
             <Button variant="ghost" size="sm" @click="handleLogout">
               <LogOut class="h-4 w-4" />
             </Button>
