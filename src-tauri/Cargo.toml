@@ -34,8 +34,8 @@ cpal = "0.17.1"
 rustrtc = "0.3"
 bytes = "1"
 rubato = "1.0.1"
+audioadapter-buffers = "2.0"
 ringbuf = "0.4"
-pulsectl-rs = "0.3.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 pulsectl-rs = "0.3"

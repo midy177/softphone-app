@@ -267,12 +267,13 @@ fn setup_capture_stream(
 
         let mut resampler = if needs_resample {
             Some(
-                rubato::FftFixedOut::<f32>::new(
+                rubato::Fft::<f32>::new(
                     device_sample_rate as usize,
                     codec_sample_rate as usize,
                     frame_samples,
                     1,
                     1,
+                    rubato::FixedSync::Output,
                 )
                 .expect("Failed to create resampler"),
             )
@@ -336,9 +337,16 @@ fn setup_capture_stream(
             // Resample if needed (device rate → codec rate)
             let pcm_f32 = if let Some(ref mut resampler) = resampler {
                 use rubato::Resampler;
-                let input = vec![device_buf[..needed].to_vec()];
-                match resampler.process(&input, None) {
-                    Ok(output) => output.into_iter().next().unwrap_or_default(),
+                use audioadapter_buffers::owned::InterleavedOwned;
+
+                let input = InterleavedOwned::new_from(
+                    device_buf[..needed].to_vec(),
+                    1, // single channel
+                    needed,
+                ).expect("Failed to create input buffer");
+
+                match resampler.process(&input, 0, None) {
+                    Ok(output) => output.take_data(),
                     Err(e) => {
                         warn!("Resample error: {}", e);
                         vec![0.0f32; frame_samples]
@@ -417,12 +425,13 @@ fn setup_playback_stream(
 
         let mut resampler = if needs_resample {
             Some(
-                rubato::FftFixedIn::<f32>::new(
+                rubato::Fft::<f32>::new(
                     codec_sample_rate as usize,
                     device_sample_rate as usize,
                     frame_samples,
                     1,
                     1,
+                    rubato::FixedSync::Input,
                 )
                 .expect("Failed to create playback resampler"),
             )
@@ -449,9 +458,16 @@ fn setup_playback_stream(
                             // Resample if needed (codec rate → device rate)
                             let output_samples = if let Some(ref mut resampler) = resampler {
                                 use rubato::Resampler;
-                                let input = vec![pcm_f32];
-                                match resampler.process(&input, None) {
-                                    Ok(output) => output.into_iter().next().unwrap_or_default(),
+                                use audioadapter_buffers::owned::InterleavedOwned;
+
+                                let input = InterleavedOwned::new_from(
+                                    pcm_f32,
+                                    1, // single channel
+                                    frame_samples,
+                                ).expect("Failed to create input buffer");
+
+                                match resampler.process(&input, 0, None) {
+                                    Ok(output) => output.take_data(),
                                     Err(e) => {
                                         warn!("Playback resample error: {}", e);
                                         continue;

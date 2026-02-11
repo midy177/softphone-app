@@ -203,7 +203,7 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
 /// Keeps: `default`, `plughw:CARD=<name>` (by card name, not number to deduplicate).
 /// Skips: pipewire, pulse, sysdefault (redundant with default), raw hw:, all virtual plugins.
 /// On non-Linux platforms, accepts all devices.
-fn is_useful_device(local_id: &str) -> bool {
+fn is_useful_device(_local_id: &str) -> bool {
     // On macOS/Windows, accept all devices (no filtering needed)
     #[cfg(not(target_os = "linux"))]
     {
