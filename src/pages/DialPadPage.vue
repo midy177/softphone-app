@@ -6,10 +6,16 @@ import { useSipCall } from '@/composables/useSipCall'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from '@/components/ui/select'
 import DialPad from '@/components/DialPad.vue'
 import CallControls from '@/components/CallControls.vue'
-import DeviceSelector from '@/components/DeviceSelector.vue'
 import IncomingCallDialog from '@/components/IncomingCallDialog.vue'
 import { Phone, LogOut, RefreshCw } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
@@ -110,22 +116,50 @@ const callStateLabel: Record<string, string> = {
 
       <CardContent class="space-y-4">
         <!-- Device selectors -->
-        <div class="flex gap-2 items-center">
-          <DeviceSelector
-            label="麦克风"
-            :devices="webrtc.microphones.value"
-            :model-value="webrtc.selectedMic.value"
-            @update:model-value="webrtc.setMic($event)"
-          />
-          <DeviceSelector
-            label="扬声器"
-            :devices="webrtc.speakers.value"
-            :model-value="webrtc.selectedSpeaker.value"
-            @update:model-value="webrtc.setSpeaker($event)"
-          />
-          <Button variant="ghost" size="sm" class="h-8 w-8 p-0 shrink-0" @click="webrtc.enumerateDevices()">
-            <RefreshCw class="h-4 w-4" />
-          </Button>
+        <div class="space-y-1">
+          <div class="flex items-center justify-between">
+            <div class="flex gap-4">
+              <Label class="text-xs text-muted-foreground w-[50%]">麦克风</Label>
+              <Label class="text-xs text-muted-foreground w-[50%]">扬声器</Label>
+            </div>
+            <Button variant="ghost" size="sm" class="h-6 w-6 p-0 shrink-0" @click="webrtc.enumerateDevices()">
+              <RefreshCw class="h-3 w-3" />
+            </Button>
+          </div>
+          <div class="flex gap-2">
+            <Select :model-value="webrtc.selectedMic.value" @update:model-value="webrtc.setMic($event)">
+              <SelectTrigger class="h-8 text-xs w-full overflow-hidden">
+                <span class="truncate block">
+                  {{ webrtc.microphones.value.find(d => d.name === webrtc.selectedMic.value)?.description || '选择麦克风' }}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="device in webrtc.microphones.value"
+                  :key="device.name"
+                  :value="device.name"
+                >
+                  {{ device.description }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <Select :model-value="webrtc.selectedSpeaker.value" @update:model-value="webrtc.setSpeaker($event)">
+              <SelectTrigger class="h-8 text-xs w-full overflow-hidden">
+                <span class="truncate block">
+                  {{ webrtc.speakers.value.find(d => d.name === webrtc.selectedSpeaker.value)?.description || '选择扬声器' }}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="device in webrtc.speakers.value"
+                  :key="device.name"
+                  :value="device.name"
+                >
+                  {{ device.description }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
         <div v-if="webrtc.deviceError.value" class="text-xs text-destructive">
           {{ webrtc.deviceError.value }}
