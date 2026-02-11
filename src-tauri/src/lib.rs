@@ -21,31 +21,45 @@ struct AudioDevices {
 }
 
 /// Linux-specific: Query PulseAudio/PipeWire for friendly device names.
-/// Returns a mapping from ALSA device identifiers to user-visible descriptions.
+/// Returns maps keyed by "card_name:device_num" (compound) and "card_name" (fallback).
 #[cfg(target_os = "linux")]
 fn get_pulse_friendly_names() -> (std::collections::HashMap<String, String>, std::collections::HashMap<String, String>) {
     use std::collections::HashMap;
     use pulsectl::controllers::{SinkController, SourceController, DeviceControl};
-    use tracing::{info, warn};
+    use tracing::{debug, info, warn};
 
     let mut input_map = HashMap::new();
     let mut output_map = HashMap::new();
+
+    // Helper: insert both compound key "card:dev" and fallback key "card"
+    fn insert_device(map: &mut HashMap<String, String>, card: &str, dev: Option<String>, friendly: String) {
+        if let Some(ref d) = dev {
+            map.insert(format!("{}:{}", card, d), friendly.clone());
+        }
+        // Fallback: card-only key (first one wins)
+        map.entry(card.to_string()).or_insert(friendly);
+    }
 
     // Get input devices (sources) via SourceController
     match SourceController::create() {
         Ok(mut source_ctrl) => {
             if let Ok(sources) = source_ctrl.list_devices() {
-                info!(count = sources.len(), "Found PulseAudio input sources");
                 for source in sources {
+                    // Skip monitor sources (loopback of output, not real microphones)
+                    if source.monitor.is_some() {
+                        continue;
+                    }
+
                     let card_name = source.proplist.get_str("alsa.card_name")
                         .or_else(|| source.proplist.get_str("device.product.name"));
+                    let device_num = source.proplist.get_str("alsa.device");
 
                     if let Some(card) = card_name {
                         let friendly_name = source.description.unwrap_or_else(|| {
                             source.name.unwrap_or_default()
                         });
-                        info!(card = %card, friendly_name = %friendly_name, "Mapped input device");
-                        input_map.insert(card, friendly_name);
+                        debug!(card = %card, dev = ?device_num, friendly = %friendly_name, "PulseAudio source");
+                        insert_device(&mut input_map, &card, device_num, friendly_name);
                     }
                 }
             }
@@ -59,17 +73,17 @@ fn get_pulse_friendly_names() -> (std::collections::HashMap<String, String>, std
     match SinkController::create() {
         Ok(mut sink_ctrl) => {
             if let Ok(sinks) = sink_ctrl.list_devices() {
-                info!(count = sinks.len(), "Found PulseAudio output sinks");
                 for sink in sinks {
                     let card_name = sink.proplist.get_str("alsa.card_name")
                         .or_else(|| sink.proplist.get_str("device.product.name"));
+                    let device_num = sink.proplist.get_str("alsa.device");
 
                     if let Some(card) = card_name {
                         let friendly_name = sink.description.unwrap_or_else(|| {
                             sink.name.unwrap_or_default()
                         });
-                        info!(card = %card, friendly_name = %friendly_name, "Mapped output device");
-                        output_map.insert(card, friendly_name);
+                        debug!(card = %card, dev = ?device_num, friendly = %friendly_name, "PulseAudio sink");
+                        insert_device(&mut output_map, &card, device_num, friendly_name);
                     }
                 }
             }
@@ -79,15 +93,23 @@ fn get_pulse_friendly_names() -> (std::collections::HashMap<String, String>, std
         }
     }
 
+    info!(input_keys = ?input_map.keys().collect::<Vec<_>>(), output_keys = ?output_map.keys().collect::<Vec<_>>(), "PulseAudio friendly name map loaded");
+
     (input_map, output_map)
 }
 
-/// Try to extract a matchable identifier from ALSA device string (e.g., card name).
+/// Extract card name from ALSA description (e.g., "HDA Intel PCH, ALC897 Analog" → "HDA Intel PCH").
 #[cfg(target_os = "linux")]
 fn extract_alsa_card_name(alsa_desc: &str) -> Option<String> {
-    // ALSA descriptions often look like "HDA Intel PCH, ALC897 Analog"
-    // Extract the first part (card name)
     alsa_desc.split(',').next().map(|s| s.trim().to_string())
+}
+
+/// Extract DEV number from cpal local ID (e.g., "plughw:CARD=PCH,DEV=0" → "0").
+#[cfg(target_os = "linux")]
+fn extract_dev_number(local_id: &str) -> Option<String> {
+    local_id.split("DEV=").nth(1).map(|s| {
+        s.split(&[',', ':']).next().unwrap_or(s).to_string()
+    })
 }
 
 #[tauri::command]
@@ -102,7 +124,6 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
     let (pulse_input_map, pulse_output_map) = get_pulse_friendly_names();
 
     let host = cpal::default_host();
-    info!(host_id = ?host.id(), "Using audio host");
 
     let devices = host
         .devices()
@@ -110,12 +131,9 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
 
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
-    let mut device_count = 0;
     let mut skipped_count = 0;
 
     for device in devices {
-        device_count += 1;
-
         let id = match device.id() {
             Ok(id) => id.to_string(),
             Err(e) => {
@@ -124,14 +142,11 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
             }
         };
 
-        info!(device_id = %id, "Found device");
-
         // Extract the backend-local part of the ID (e.g. "alsa:plughw:CARD=PCH,DEV=0" → "plughw:CARD=PCH,DEV=0")
         let local_id = id.split_once(':').map(|(_, rest)| rest).unwrap_or(&id);
 
         // Only keep useful devices, skip ALSA virtual plugins
         if !is_useful_device(local_id) {
-            info!(device_id = %id, local_id = %local_id, "Skipping device (not useful)");
             skipped_count += 1;
             continue;
         }
@@ -143,59 +158,64 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
             .unwrap_or_else(|_| id.clone());
 
         // On Linux, try to find a friendly name from PulseAudio
+        // Devices without a PulseAudio match (except "default") are skipped — no active hardware
         #[cfg(target_os = "linux")]
-        let desc = {
-            if let Some(card_name) = extract_alsa_card_name(&cpal_desc) {
-                // Try to find in PulseAudio mappings
-                let friendly = pulse_input_map.get(&card_name)
-                    .or_else(|| pulse_output_map.get(&card_name))
-                    .cloned();
+        let (input_desc, output_desc) = {
+            if local_id == "default" {
+                (Some(cpal_desc.clone()), Some(cpal_desc))
+            } else if let Some(card_name) = extract_alsa_card_name(&cpal_desc) {
+                let dev_num = extract_dev_number(local_id);
+                let compound_key = dev_num.as_ref().map(|d| format!("{}:{}", card_name, d));
 
-                if let Some(ref friendly_name) = friendly {
-                    info!(id = %id, cpal_desc = %cpal_desc, friendly_name = %friendly_name, "Using friendly name");
-                    friendly_name.clone()
-                } else {
-                    info!(id = %id, cpal_desc = %cpal_desc, "No friendly name found, using cpal description");
-                    cpal_desc
-                }
+                let resolve = |map: &std::collections::HashMap<String, String>| -> Option<String> {
+                    compound_key.as_ref()
+                        .and_then(|k| map.get(k))
+                        .or_else(|| map.get(&card_name))
+                        .cloned()
+                };
+
+                (resolve(&pulse_input_map), resolve(&pulse_output_map))
             } else {
-                cpal_desc
+                (None, None)
             }
         };
 
-        // On macOS/Windows, use cpal description directly
         #[cfg(not(target_os = "linux"))]
-        let desc = {
-            info!(id = %id, description = %cpal_desc, "Using cpal description");
-            cpal_desc
-        };
+        let (input_desc, output_desc) = (Some(cpal_desc.clone()), Some(cpal_desc));
 
         let has_input = device.default_input_config().is_ok();
         let has_output = device.default_output_config().is_ok();
 
-        info!(device_id = %id, has_input = %has_input, has_output = %has_output, "Device capabilities");
-
         if has_input {
-            inputs.push(AudioDevice {
-                name: id.clone(),
-                description: desc.clone(),
-            });
+            if let Some(desc) = input_desc {
+                inputs.push(AudioDevice {
+                    name: id.clone(),
+                    description: desc,
+                });
+            }
         }
         if has_output {
-            outputs.push(AudioDevice {
-                name: id,
-                description: desc,
-            });
+            if let Some(desc) = output_desc {
+                outputs.push(AudioDevice {
+                    name: id,
+                    description: desc,
+                });
+            }
         }
     }
 
     info!(
-        total_devices = device_count,
         skipped = skipped_count,
-        input_count = inputs.len(),
-        output_count = outputs.len(),
+        inputs = inputs.len(),
+        outputs = outputs.len(),
         "Device enumeration complete"
     );
+    for d in &inputs {
+        info!(name = %d.name, desc = %d.description, "Input device");
+    }
+    for d in &outputs {
+        info!(name = %d.name, desc = %d.description, "Output device");
+    }
 
     Ok(AudioDevices { inputs, outputs })
 }
