@@ -64,30 +64,36 @@ function handleReject() {
               <div v-if="callee" class="text-sm text-muted-foreground">
                 呼叫至: {{ callee }}
               </div>
-              <div class="text-sm text-muted-foreground">
-                正在呼叫...
+              <div class="text-lg text-primary font-medium">
+                响铃中...
               </div>
             </div>
 
             <!-- Call Actions -->
             <div class="flex justify-center gap-8">
               <!-- Reject Button -->
-              <button
-                type="button"
-                class="flex h-16 w-16 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-lg transition-transform hover:scale-110 active:scale-95"
-                @click="handleReject"
-              >
-                <PhoneOff class="h-8 w-8" />
-              </button>
+              <div class="flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  class="flex h-16 w-16 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-lg transition-transform hover:scale-110 active:scale-95"
+                  @click="handleReject"
+                >
+                  <PhoneOff class="h-8 w-8" />
+                </button>
+                <span class="text-xs text-muted-foreground">挂断</span>
+              </div>
 
               <!-- Accept Button -->
-              <button
-                type="button"
-                class="flex h-16 w-16 items-center justify-center rounded-full bg-green-600 text-white shadow-lg transition-transform hover:scale-110 active:scale-95"
-                @click="handleAccept"
-              >
-                <Phone class="h-8 w-8" />
-              </button>
+              <div class="flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  class="flex h-16 w-16 items-center justify-center rounded-full bg-green-600 text-white shadow-lg transition-transform hover:scale-110 active:scale-95"
+                  @click="handleAccept"
+                >
+                  <Phone class="h-8 w-8" />
+                </button>
+                <span class="text-xs text-muted-foreground">接听</span>
+              </div>
             </div>
           </CardContent>
         </Card>
