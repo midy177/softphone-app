@@ -116,10 +116,10 @@ const callStateLabel: Record<string, string> = {
 
       <CardContent class="space-y-4">
         <!-- Device selectors -->
-        <div class="grid grid-cols-[1fr_1fr_auto] gap-x-2 gap-y-1">
+        <div class="grid grid-cols-2 gap-x-2 gap-y-1">
           <Label class="text-xs text-muted-foreground">麦克风</Label>
-          <Label class="text-xs text-muted-foreground">扬声器</Label>
-          <div class="flex items-center justify-center">
+          <div class="flex items-center justify-between">
+            <Label class="text-xs text-muted-foreground">扬声器</Label>
             <Button variant="ghost" size="sm" class="h-6 w-6 p-0" @click="webrtc.enumerateDevices()">
               <RefreshCw class="h-3 w-3" />
             </Button>
@@ -156,7 +156,6 @@ const callStateLabel: Record<string, string> = {
               </SelectItem>
             </SelectContent>
           </Select>
-          <div></div>
         </div>
         <div v-if="webrtc.deviceError.value" class="text-xs text-destructive">
           {{ webrtc.deviceError.value }}
