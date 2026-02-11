@@ -1,0 +1,38 @@
+[package]
+name = "softphone-app"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "softphone_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rsipstack = "0.4.7"
+rsip = "0.4.0"
+tokio = "1.49.0"
+tokio-util = "0.7.18"
+tracing = "0.1.44"
+uuid = { version = "1.20.0", features = ["v4"] }
+get_if_addrs = "0.5.3"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "local-time"] }
+cpal = "0.17.1"
+rustrtc = "0.3"
+bytes = "1"
+rubato = "0.16"
+ringbuf = "0.4"
+
