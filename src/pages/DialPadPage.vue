@@ -117,17 +117,15 @@ const callStateLabel: Record<string, string> = {
       <CardContent class="space-y-4">
         <!-- Device selectors -->
         <div class="space-y-1">
-          <div class="flex items-center justify-between">
-            <div class="flex gap-4">
-              <Label class="text-xs text-muted-foreground w-[50%]">麦克风</Label>
-              <Label class="text-xs text-muted-foreground w-[50%]">扬声器</Label>
-            </div>
+          <div class="flex items-center justify-between gap-2">
+            <Label class="text-xs text-muted-foreground flex-1">麦克风</Label>
+            <Label class="text-xs text-muted-foreground flex-1">扬声器</Label>
             <Button variant="ghost" size="sm" class="h-6 w-6 p-0 shrink-0" @click="webrtc.enumerateDevices()">
               <RefreshCw class="h-3 w-3" />
             </Button>
           </div>
           <div class="flex gap-2">
-            <Select :model-value="webrtc.selectedMic.value" @update:model-value="webrtc.setMic($event)">
+            <Select :model-value="webrtc.selectedMic.value" @update:model-value="webrtc.setMic($event)" class="flex-1">
               <SelectTrigger class="h-8 text-xs w-full overflow-hidden">
                 <span class="truncate block">
                   {{ webrtc.microphones.value.find(d => d.name === webrtc.selectedMic.value)?.description || '选择麦克风' }}
@@ -143,7 +141,7 @@ const callStateLabel: Record<string, string> = {
                 </SelectItem>
               </SelectContent>
             </Select>
-            <Select :model-value="webrtc.selectedSpeaker.value" @update:model-value="webrtc.setSpeaker($event)">
+            <Select :model-value="webrtc.selectedSpeaker.value" @update:model-value="webrtc.setSpeaker($event)" class="flex-1">
               <SelectTrigger class="h-8 text-xs w-full overflow-hidden">
                 <span class="truncate block">
                   {{ webrtc.speakers.value.find(d => d.name === webrtc.selectedSpeaker.value)?.description || '选择扬声器' }}
