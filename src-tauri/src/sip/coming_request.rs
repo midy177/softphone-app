@@ -112,10 +112,30 @@ pub async fn process_incoming_request(
                         pending.insert(call_id.clone(), PendingCall {
                             call_id: call_id.clone(),
                             caller: caller.clone(),
-                            dialog: rsipstack::dialog::dialog::Dialog::ServerInvite(dialog),
-                            sdp_offer,
+                            dialog: rsipstack::dialog::dialog::Dialog::ServerInvite(dialog.clone()),
+                            sdp_offer: sdp_offer.clone(),
                         });
                     }
+
+                    // Spawn task to hold transaction alive until call is answered/rejected
+                    // This prevents the channel from closing before accept()/reject() is called
+                    let call_id_clone = call_id.clone();
+                    let pending_clone = pending_incoming.clone();
+                    tokio::spawn(async move {
+                        // Hold tx here and wait for the call to be removed from pending
+                        // (which happens when user answers or rejects)
+                        loop {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            let pending = pending_clone.lock().await;
+                            if !pending.contains_key(&call_id_clone) {
+                                // Call was answered or rejected, tx can be dropped now
+                                debug!(call_id = %call_id_clone, "Call no longer pending, dropping transaction");
+                                break;
+                            }
+                            drop(pending); // Release lock before next iteration
+                        }
+                        // tx is dropped here after call is answered/rejected
+                    });
 
                     // Emit event to frontend
                     let payload = IncomingCallPayload {

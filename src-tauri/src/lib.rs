@@ -224,7 +224,7 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
 /// Keeps: `default`, `plughw:CARD=<name>` (by card name, not number to deduplicate).
 /// Skips: pipewire, pulse, sysdefault (redundant with default), raw hw:, all virtual plugins.
 /// On non-Linux platforms, accepts all devices.
-fn is_useful_device(local_id: &str) -> bool {
+fn is_useful_device(_local_id: &str) -> bool {
     // On macOS/Windows, accept all devices (no filtering needed)
     #[cfg(not(target_os = "linux"))]
     {
@@ -234,10 +234,10 @@ fn is_useful_device(local_id: &str) -> bool {
     // On Linux, apply ALSA-specific filtering
     #[cfg(target_os = "linux")]
     {
-        if local_id == "default" {
+        if _local_id == "default" {
             return true;
         }
-        if let Some(rest) = local_id.strip_prefix("plughw:") {
+        if let Some(rest) = _local_id.strip_prefix("plughw:") {
             // Only keep CARD=<name> form, skip CARD=<number> (duplicate)
             if let Some(card_val) = rest.strip_prefix("CARD=") {
                 let card_name = card_val.split(&[',', ':']).next().unwrap_or("");
@@ -398,6 +398,16 @@ async fn toggle_speaker_mute(state: State<'_, SipAppState>) -> Result<bool, Stri
     sip::handle_toggle_speaker_mute(handle).await
 }
 
+#[tauri::command]
+async fn send_dtmf(state: State<'_, SipAppState>, digit: String) -> Result<(), String> {
+    let handle_guard = state.handle.lock().await;
+    let handle = handle_guard
+        .as_ref()
+        .ok_or_else(|| "Not registered".to_string())?;
+
+    sip::handle_send_dtmf(handle, digit).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     logging::initialize_logging("info", true);
@@ -423,6 +433,7 @@ pub fn run() {
             set_output_device,
             toggle_mic_mute,
             toggle_speaker_mute,
+            send_dtmf,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

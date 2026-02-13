@@ -481,3 +481,24 @@ pub async fn handle_reject_call(
         )),
     }
 }
+
+/// Send DTMF digit during active call
+pub async fn handle_send_dtmf(handle: &SipClientHandle, digit: String) -> Result<(), String> {
+    let digit_char = digit
+        .chars()
+        .next()
+        .ok_or("DTMF digit must be a single character")?;
+
+    // Check if there's an active call
+    let active = handle.active_call.lock().await;
+    if let Some(call) = active.as_ref() {
+        if let Some(session) = call.webrtc_session.as_ref() {
+            info!(digit = %digit_char, call_id = %call.call_id, "Sending DTMF digit");
+            session.send_dtmf(digit_char).await
+        } else {
+            Err("No active WebRTC session".to_string())
+        }
+    } else {
+        Err("No active call".to_string())
+    }
+}
