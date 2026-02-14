@@ -31,12 +31,14 @@ uuid = { version = "1.20.0", features = ["v4"] }
 get_if_addrs = "0.5.3"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "local-time"] }
 cpal = "0.17.1"
-rustrtc = "0.3"
+rustrtc = "0.3.21"
 bytes = "1"
 rubato = "1.0.1"
 audioadapter-buffers = "2.0"
 ringbuf = "0.4"
 audio-codec = { version = "0.3", default-features = false, features = ["opus"] }
+dashmap = "6.1"
+chrono = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 pulsectl-rs = "0.3.2"
