@@ -70,14 +70,16 @@ export function useWebRTC() {
     }
   }
 
-  async function setMic(name: string) {
+  async function setMic(name: string | null) {
+    if (!name) return
     console.debug('[Audio] Set mic:', name)
     selectedMic.value = name
     saveDevices()
     await invoke('set_input_device', { name })
   }
 
-  async function setSpeaker(name: string) {
+  async function setSpeaker(name: string | null) {
+    if (!name) return
     console.debug('[Audio] Set speaker:', name)
     selectedSpeaker.value = name
     saveDevices()

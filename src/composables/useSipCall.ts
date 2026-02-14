@@ -109,10 +109,15 @@ export function useSipCall() {
       return
     }
 
-    console.debug('[Call] Answering call:', incomingCall.value.call_id)
+    const { call_id, caller } = incomingCall.value
+    console.debug('[Call] Answering call:', call_id)
     try {
-      await invoke('sip_answer_call', { callId: incomingCall.value.call_id })
+      await invoke('sip_answer_call', { callId: call_id })
       console.debug('[Call] Call answered')
+      // 立即更新前端状态，不等 Rust 的 connected 事件
+      callee.value = caller
+      incomingCall.value = null
+      callState.value = 'connected'
     } catch (e) {
       error.value = String(e)
       console.error('[Call] Answer failed:', e)
@@ -142,6 +147,18 @@ export function useSipCall() {
     }
   }
 
+  async function sendDtmf(digit: string) {
+    console.debug('[Call] Sending DTMF:', digit)
+    try {
+      await invoke('send_dtmf', { digit })
+      console.debug('[Call] DTMF sent:', digit)
+    } catch (e) {
+      error.value = String(e)
+      console.error('[Call] DTMF failed:', e)
+      throw e
+    }
+  }
+
   return {
     callState,
     callee,
@@ -151,6 +168,7 @@ export function useSipCall() {
     hangup,
     answerCall,
     rejectCall,
+    sendDtmf,
     webrtc,
   }
 }

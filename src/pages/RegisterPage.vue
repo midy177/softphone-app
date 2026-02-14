@@ -165,7 +165,7 @@ async function handleRegister() {
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center p-4">
+  <div class="flex h-screen items-center justify-center p-4 overflow-y-auto">
     <Card class="w-full max-w-md">
       <CardHeader>
         <CardTitle class="text-center text-2xl">SIP 软电话</CardTitle>

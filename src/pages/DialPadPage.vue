@@ -22,7 +22,7 @@ import { toast } from 'vue-sonner'
 
 const router = useRouter()
 const { isRegistered, currentExtension, unregister } = useSipRegistration()
-const { callState, incomingCall, dial, hangup, answerCall, rejectCall, webrtc } = useSipCall()
+const { callState, callee, incomingCall, dial, hangup, answerCall, rejectCall, sendDtmf, webrtc } = useSipCall()
 
 const phoneNumber = ref('')
 
@@ -35,7 +35,15 @@ onMounted(async () => {
 })
 
 function onDialPadKey(key: string) {
-  phoneNumber.value += key
+  if (callState.value === 'connected') {
+    // 通话中发送 DTMF
+    sendDtmf(key).catch((e) => {
+      toast.error(`发送 DTMF 失败: ${e}`)
+    })
+  } else {
+    // 空闲时添加到号码
+    phoneNumber.value += key
+  }
 }
 
 async function handleDial() {
@@ -55,9 +63,6 @@ async function handleHangup() {
 }
 
 async function handleLogout() {
-  if (callState.value !== 'idle') {
-    await hangup()
-  }
   await unregister()
   await router.push('/')
 }
@@ -89,7 +94,7 @@ const callStateLabel: Record<string, string> = {
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center">
+  <div class="h-screen overflow-y-auto">
     <!-- Incoming Call Dialog -->
     <IncomingCallDialog
       :open="callState === 'incoming' && !!incomingCall"
@@ -99,12 +104,12 @@ const callStateLabel: Record<string, string> = {
       @reject="handleReject"
     />
 
-    <Card class="w-full max-w-sm">
-      <CardHeader class="pb-3">
+    <Card class="w-full border-0 shadow-none bg-transparent backdrop-blur-md rounded-none">
+      <CardHeader class="pb-0">
         <div class="flex items-center justify-between">
-          <CardTitle class="text-lg">拨号面板</CardTitle>
+          <CardTitle class="text-lg font-bold">拨号面板</CardTitle>
           <div class="flex items-center gap-2">
-            <span class="text-xs text-green-600">
+            <span class="text-md font-bold text-green-600">
               ● 已注册{{ currentExtension ? ` (${currentExtension})` : '' }}
             </span>
             <Button variant="ghost" size="sm" @click="handleLogout">
@@ -116,7 +121,7 @@ const callStateLabel: Record<string, string> = {
 
       <CardContent class="space-y-4">
         <!-- Device selectors -->
-        <div class="grid grid-cols-2 gap-x-2 gap-y-1">
+        <div v-if="callState !== 'connected'" class="grid grid-cols-2 gap-x-2 gap-y-1">
           <Label class="text-xs text-muted-foreground">麦克风</Label>
           <div class="flex items-center justify-between">
             <Label class="text-xs text-muted-foreground">扬声器</Label>
@@ -124,7 +129,7 @@ const callStateLabel: Record<string, string> = {
               <RefreshCw class="h-3 w-3" />
             </Button>
           </div>
-          <Select :model-value="webrtc.selectedMic.value" @update:model-value="webrtc.setMic($event)">
+          <Select :model-value="webrtc.selectedMic.value" @update:model-value="v => webrtc.setMic(v as string | null)">
             <SelectTrigger class="h-8 text-xs w-full overflow-hidden">
               <span class="truncate block">
                 {{ webrtc.microphones.value.find(d => d.name === webrtc.selectedMic.value)?.description || '选择麦克风' }}
@@ -140,7 +145,7 @@ const callStateLabel: Record<string, string> = {
               </SelectItem>
             </SelectContent>
           </Select>
-          <Select :model-value="webrtc.selectedSpeaker.value" @update:model-value="webrtc.setSpeaker($event)">
+          <Select :model-value="webrtc.selectedSpeaker.value" @update:model-value="v => webrtc.setSpeaker(v as string | null)">
             <SelectTrigger class="h-8 text-xs w-full overflow-hidden">
               <span class="truncate block">
                 {{ webrtc.speakers.value.find(d => d.name === webrtc.selectedSpeaker.value)?.description || '选择扬声器' }}
@@ -157,10 +162,10 @@ const callStateLabel: Record<string, string> = {
             </SelectContent>
           </Select>
         </div>
-        <div v-if="webrtc.deviceError.value" class="text-xs text-destructive">
+        <div v-if="webrtc.deviceError.value && callState !== 'connected'" class="text-xs text-destructive">
           {{ webrtc.deviceError.value }}
         </div>
-        <div v-if="!webrtc.microphones.value.length" class="text-xs text-muted-foreground">
+        <div v-if="!webrtc.microphones.value.length && callState !== 'connected'" class="text-xs text-muted-foreground">
           未检测到设备
         </div>
 
@@ -187,24 +192,30 @@ const callStateLabel: Record<string, string> = {
 
         <!-- Dial pad -->
         <DialPad
-          v-if="callState === 'idle'"
+          v-if="callState === 'idle' || callState === 'connected'"
           :model-value="phoneNumber"
           @update:model-value="onDialPadKey"
         />
 
         <!-- Call state indicator -->
         <div
-          v-if="callState !== 'idle'"
+          v-if="callState !== 'idle' && callState !== 'connected'"
           class="text-center py-4"
         >
           <p class="text-lg font-medium">
             {{ callStateLabel[callState] || callState }}
           </p>
-          <p class="text-sm text-muted-foreground">{{ phoneNumber }}</p>
+          <p class="text-sm text-muted-foreground">{{ callee || phoneNumber }}</p>
         </div>
 
         <!-- Call controls -->
-        <div v-if="callState === 'connected'" class="pt-2">
+        <div v-if="callState === 'connected'" class="pt-2 space-y-3">
+          <div class="text-center">
+            <p class="text-lg font-medium">
+              {{ callStateLabel[callState] || callState }}
+            </p>
+            <p class="text-sm text-muted-foreground">{{ callee || phoneNumber }}</p>
+          </div>
           <CallControls
             :is-mic-muted="webrtc.isMicMuted.value"
             :is-speaker-muted="webrtc.isSpeakerMuted.value"
