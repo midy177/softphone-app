@@ -12,6 +12,7 @@ pub trait CodecTypeExt {
     fn from_payload_type(pt: u8) -> Option<CodecType>;
 
     /// Get RTP payload type for this codec
+    #[allow(dead_code)]
     fn to_payload_type(&self) -> u8;
 
     /// Get default clock rate for this codec

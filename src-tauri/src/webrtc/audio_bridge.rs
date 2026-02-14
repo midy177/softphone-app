@@ -138,14 +138,6 @@ impl AudioBridge {
         new_state
     }
 
-    pub fn is_mic_muted(&self) -> bool {
-        self.mic_muted.load(Ordering::Relaxed)
-    }
-
-    pub fn is_speaker_muted(&self) -> bool {
-        self.speaker_muted.load(Ordering::Relaxed)
-    }
-
     pub fn close(&mut self) {
         info!("Closing audio bridge");
         self.stop_notify.notify_waiters();
@@ -422,6 +414,7 @@ fn setup_playback_stream(
     let muted = speaker_muted.clone();
     tokio::spawn(async move {
         let needs_resample = device_sample_rate != codec_sample_rate;
+        let mut frame_count = 0u64;
 
         let mut resampler = if needs_resample {
             Some(
@@ -444,12 +437,29 @@ fn setup_playback_stream(
                 result = remote_track.recv() => {
                     match result {
                         Ok(MediaSample::Audio(frame)) => {
+                            frame_count += 1;
+                            if frame_count == 1 || frame_count % 50 == 0 {
+                                info!(frame_count, bytes = frame.data.len(), timestamp = frame.rtp_timestamp, "Received audio frame from remote");
+                            }
                             if muted.load(Ordering::Relaxed) {
+                                continue;
+                            }
+
+                            // Skip frames that are too small (likely STUN packets misidentified as RTP)
+                            if frame.data.len() < 10 {
+                                warn!(bytes = frame.data.len(), "Skipping small frame (possibly STUN packet)");
                                 continue;
                             }
 
                             // Decode with negotiated codec → i16 → f32
                             let pcm_i16 = codec_type.decode(&frame.data);
+
+                            // Skip if decoded data is too small
+                            if pcm_i16.len() < frame_samples {
+                                warn!(actual = pcm_i16.len(), expected = frame_samples, "Decoded frame too small, skipping");
+                                continue;
+                            }
+
                             let pcm_f32: Vec<f32> = pcm_i16
                                 .iter()
                                 .map(|&s| s as f32 / 32768.0)
