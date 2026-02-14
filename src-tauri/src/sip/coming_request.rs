@@ -9,7 +9,7 @@ use rsipstack::dialog::dialog::DialogStateSender;
 use tauri::Emitter;
 use tracing::{debug, info, warn};
 
-use crate::sip::state::{IncomingCallPayload, PendingCall};
+use crate::sip::state::{ActiveCall, IncomingCallPayload, PendingCall};
 
 pub async fn process_incoming_request(
     dialog_layer: Arc<DialogLayer>,
@@ -18,6 +18,7 @@ pub async fn process_incoming_request(
     contact: rsip::Uri,
     app_handle: tauri::AppHandle,
     pending_incoming: Arc<tokio::sync::Mutex<HashMap<String, PendingCall>>>,
+    active_call: Arc<tokio::sync::Mutex<Option<ActiveCall>>>,
 ) -> Result<()> {
     while let Some(mut tx) = incoming.recv().await {
         let method = tx.original.method.to_string();
@@ -51,6 +52,17 @@ pub async fn process_incoming_request(
             rsip::Method::Invite | rsip::Method::Ack => {
                 // Handle incoming INVITE
                 if tx.original.method == rsip::Method::Invite {
+                    // Check if we already have an active call with this call_id
+                    let already_active = {
+                        let active = active_call.lock().await;
+                        active.as_ref().map_or(false, |call| call.call_id == call_id)
+                    };
+
+                    if already_active {
+                        debug!(call_id = %call_id, "INVITE retransmission for active call, ignoring");
+                        continue;
+                    }
+
                     // Check if we already have a pending call for this call_id
                     let already_pending = {
                         let pending = pending_incoming.lock().await;
@@ -78,6 +90,7 @@ pub async fn process_incoming_request(
                     let sdp_offer = String::from_utf8_lossy(&tx.original.body).to_string();
 
                     info!(call_id = %call_id, caller = %caller, "Received incoming INVITE");
+                    info!(call_id = %call_id, sdp_offer = %sdp_offer, "Incoming SDP offer content");
 
                     // Create server dialog but don't respond yet - wait for user action
                     let dialog = match dialog_layer.get_or_create_server_invite(
@@ -97,44 +110,22 @@ pub async fn process_incoming_request(
 
                     info!(call_id = %call_id, "Created server dialog, notifying frontend");
 
-                    // Send 180 Ringing to keep dialog alive while waiting for user action
-                    if let Err(e) = dialog.ringing(None, None) {
-                        warn!(call_id = %call_id, error = ?e, "Failed to send 180 Ringing");
-                        tx.reply(rsip::StatusCode::ServerInternalError).await?;
-                        continue;
-                    }
-
-                    info!(call_id = %call_id, "Sent 180 Ringing, waiting for user action");
-
-                    // Store pending call
+                    // Store pending call with dialog clone (will be used for ringing/accept later)
                     {
                         let mut pending = pending_incoming.lock().await;
                         pending.insert(call_id.clone(), PendingCall {
-                            call_id: call_id.clone(),
-                            caller: caller.clone(),
                             dialog: rsipstack::dialog::dialog::Dialog::ServerInvite(dialog.clone()),
                             sdp_offer: sdp_offer.clone(),
                         });
                     }
 
-                    // Spawn task to hold transaction alive until call is answered/rejected
-                    // This prevents the channel from closing before accept()/reject() is called
-                    let call_id_clone = call_id.clone();
-                    let pending_clone = pending_incoming.clone();
+                    // Spawn task to handle transaction - this is critical for SIP message handling
+                    let mut dialog_for_handle = dialog;
                     tokio::spawn(async move {
-                        // Hold tx here and wait for the call to be removed from pending
-                        // (which happens when user answers or rejects)
-                        loop {
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                            let pending = pending_clone.lock().await;
-                            if !pending.contains_key(&call_id_clone) {
-                                // Call was answered or rejected, tx can be dropped now
-                                debug!(call_id = %call_id_clone, "Call no longer pending, dropping transaction");
-                                break;
-                            }
-                            drop(pending); // Release lock before next iteration
+                        if let Err(e) = dialog_for_handle.handle(&mut tx).await {
+                            warn!(error = ?e, "Failed to handle transaction");
                         }
-                        // tx is dropped here after call is answered/rejected
+                        Ok::<_, Error>(())
                     });
 
                     // Emit event to frontend

@@ -1,8 +1,10 @@
 use std::sync::Arc;
+use dashmap::DashMap;
 use rsipstack::dialog::dialog::{Dialog, DialogState, DialogStateReceiver};
 use rsipstack::dialog::dialog_layer::DialogLayer;
 use rsipstack::Error;
 use tauri::{AppHandle, Emitter};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::sip::state::CallStatePayload;
@@ -11,6 +13,7 @@ pub async fn process_dialog(
     dialog_layer: Arc<DialogLayer>,
     state_receiver: DialogStateReceiver,
     app_handle: AppHandle,
+    active_call_tokens: Arc<DashMap<String, CancellationToken>>,
 ) -> Result<(), Error> {
     let mut state_receiver = state_receiver;
     while let Some(state) = state_receiver.recv().await {
@@ -59,6 +62,13 @@ pub async fn process_dialog(
             DialogState::Terminated(id, reason) => {
                 info!(dialog_id = %id, reason = ?reason, "Dialog terminated");
                 dialog_layer.remove_dialog(&id);
+
+                // Cancel and remove the call's cancellation token to trigger cleanup
+                if let Some((_, token)) = active_call_tokens.remove(&id.to_string()) {
+                    debug!(dialog_id = %id, "Cancelling call token for cleanup");
+                    token.cancel();
+                }
+
                 let _ = app_handle.emit("sip://call-state", CallStatePayload {
                     state: "ended".to_string(),
                     call_id: Some(id.to_string()),

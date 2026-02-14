@@ -6,6 +6,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+use dashmap::DashMap;
 
 use crate::webrtc::WebRtcSession;
 
@@ -23,8 +24,9 @@ pub struct SipClientHandle {
     pub contact: Uri,
     pub credential: Credential,
     pub server: Uri,
-    pub active_call: tokio::sync::Mutex<Option<ActiveCall>>,
+    pub active_call: Arc<tokio::sync::Mutex<Option<ActiveCall>>>,
     pub pending_incoming: Arc<tokio::sync::Mutex<HashMap<String, PendingCall>>>,
+    pub active_call_tokens: Arc<DashMap<String, CancellationToken>>,
     pub _tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -32,11 +34,10 @@ pub struct ActiveCall {
     pub call_id: String,
     pub dialog: Dialog,
     pub webrtc_session: Option<WebRtcSession>,
+    pub cancel_token: CancellationToken,
 }
 
 pub struct PendingCall {
-    pub call_id: String,
-    pub caller: String,
     pub dialog: Dialog,
     pub sdp_offer: String,
 }

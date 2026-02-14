@@ -78,7 +78,7 @@ async fn try_call_with_mode(
     callee: &str,
     prefer_srtp: bool,
 ) -> rsipstack::Result<(rsipstack::dialog::dialog::Dialog, WebRtcSession)> {
-    // Create WebRTC session and generate SDP offer
+    // Create WebRTC session and generate SDP offer with ICE candidates
     let (mut session, sdp_offer) = WebRtcSession::new_outbound(
         input_device.as_deref(),
         output_device.as_deref(),
@@ -109,7 +109,7 @@ async fn try_call_with_mode(
             status_code = ?resp.status_code,
             "Call rejected by remote"
         );
-        session.close();
+        session.close().await;
         return Err(Error::Error(format!(
             "Call rejected: {}",
             resp.status_code

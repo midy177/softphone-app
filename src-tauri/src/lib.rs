@@ -283,9 +283,13 @@ async fn sip_register(
 
 #[tauri::command]
 async fn sip_unregister(state: State<'_, SipAppState>) -> Result<(), String> {
+    // Cancel global token - this will cascade to all child tokens (active calls)
     if let Some(token) = state.cancel_token.lock().await.take() {
         token.cancel();
+        // Give child tokens time to propagate cancellation and clean up
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
+
     state.handle.lock().await.take();
     Ok(())
 }
@@ -303,7 +307,15 @@ async fn sip_make_call(
         .as_ref()
         .ok_or_else(|| "Not registered".to_string())?;
 
-    sip::handle_make_call(handle, callee, input_device, output_device)
+    let cancel_token = state
+        .cancel_token
+        .lock()
+        .await
+        .as_ref()
+        .ok_or_else(|| "No cancel token available".to_string())?
+        .clone();
+
+    sip::handle_make_call(handle, callee, input_device, output_device, cancel_token)
         .await
         .map_err(|e| {
             error!(error = ?e, "Make call failed");
@@ -337,7 +349,15 @@ async fn sip_answer_call(
         .as_ref()
         .ok_or_else(|| "Not registered".to_string())?;
 
-    sip::handle_answer_call(handle, call_id, input_device, output_device)
+    let cancel_token = state
+        .cancel_token
+        .lock()
+        .await
+        .as_ref()
+        .ok_or_else(|| "No cancel token available".to_string())?
+        .clone();
+
+    sip::handle_answer_call(handle, call_id, input_device, output_device, cancel_token)
         .await
         .map_err(|e| {
             error!(error = ?e, "Answer call failed");

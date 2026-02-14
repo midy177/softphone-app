@@ -1,7 +1,8 @@
 use crate::sip::helpers::{
     create_transport_connection, extract_protocol_from_uri, get_first_non_loopback_interface,
 };
-use crate::sip::state::{SipClientHandle, ActiveCall};
+use crate::sip::state::{SipClientHandle, ActiveCall, PendingCall};
+use dashmap::DashMap;
 use rsip::Uri;
 use rsipstack::dialog::authenticate::Credential;
 use rsipstack::dialog::dialog_layer::DialogLayer;
@@ -25,6 +26,7 @@ mod helpers;
 mod make_call;
 mod registration;
 pub mod state;
+mod sip_logger;
 
 pub struct SipClient;
 
@@ -37,6 +39,15 @@ impl SipClient {
         password: String,
         outbound_proxy: Option<String>,
     ) -> rsipstack::Result<(SipClientHandle, CancellationToken)> {
+        // Initialize SIP message logger (only once)
+        static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+        LOGGER_INIT.call_once(|| {
+            if let Err(e) = sip_logger::init_sip_logger("logs") {
+                error!(error = ?e, "Failed to initialize SIP message logger");
+            } else {
+                info!("SIP message logger initialized: logs/sip_messages.log");
+            }
+        });
         // Parse server URI
         let server_uri_str = if server.starts_with("sip:") || server.starts_with("sips:") {
             server
@@ -156,8 +167,10 @@ impl SipClient {
         // Spawn background tasks BEFORE registration (endpoint.serve() must run to receive responses)
         let mut tasks = Vec::new();
 
-        // Initialize pending_incoming HashMap
+        // Initialize pending_incoming HashMap, active_call, and call cancellation tokens
         let pending_incoming = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let active_call = Arc::new(tokio::sync::Mutex::new(None));
+        let active_call_tokens = Arc::new(DashMap::new());
 
         // Task 1: endpoint.serve()
         tasks.push(tokio::spawn(async move {
@@ -171,19 +184,21 @@ impl SipClient {
         let ct = contact.clone();
         let ah = app_handle.clone();
         let pi = pending_incoming.clone();
+        let ac = active_call.clone();
         tasks.push(tokio::spawn(async move {
             if let Err(e) =
-                coming_request::process_incoming_request(dl, incoming, ss, ct, ah, pi).await
+                coming_request::process_incoming_request(dl, incoming, ss, ct, ah, pi, ac).await
             {
                 error!(error = ?e, "Incoming request loop error");
             }
         }));
 
-        // Task 3: process_dialog (with app_handle for event emission)
+        // Task 3: process_dialog (with app_handle for event emission and call tokens for cleanup)
         let dl = dialog_layer.clone();
         let ah = app_handle.clone();
+        let tokens = active_call_tokens.clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(e) = dialog::process_dialog(dl, state_receiver, ah).await {
+            if let Err(e) = dialog::process_dialog(dl, state_receiver, ah, tokens).await {
                 error!(error = ?e, "Dialog loop error");
             }
         }));
@@ -222,8 +237,9 @@ impl SipClient {
             contact,
             credential,
             server: server_uri,
-            active_call: tokio::sync::Mutex::new(None),
+            active_call,
             pending_incoming,
+            active_call_tokens,
             _tasks: tasks,
         }, cancel_token))
     }
@@ -235,6 +251,7 @@ pub async fn handle_make_call(
     callee: String,
     input_device: Option<String>,
     output_device: Option<String>,
+    global_cancel_token: CancellationToken,
 ) -> rsipstack::Result<()> {
     let call_id = Uuid::new_v4().to_string();
 
@@ -259,6 +276,7 @@ pub async fn handle_make_call(
         ..Default::default()
     };
 
+    // 外呼不需要 STUN 映射：PBX 会根据我们发送的 RTP 源地址做 latching
     let (dialog, webrtc_session) = make_call::make_call(
         handle.dialog_layer.clone(),
         invite_option,
@@ -268,6 +286,17 @@ pub async fn handle_make_call(
     )
     .await?;
 
+    // Create child token from global cancel token
+    let call_cancel_token = global_cancel_token.child_token();
+
+    // Register token (use dialog ID as key for consistency with process_dialog)
+    let dialog_id = match &dialog {
+        rsipstack::dialog::dialog::Dialog::ClientInvite(d) => d.id().to_string(),
+        _ => call_id.clone(),
+    };
+    handle.active_call_tokens.insert(dialog_id.clone(), call_cancel_token.clone());
+    debug!(call_id = %call_id, dialog_id = %dialog_id, "Registered call cancellation token (child of global)");
+
     // Store active call with WebRTC session
     {
         let mut active = handle.active_call.lock().await;
@@ -275,6 +304,7 @@ pub async fn handle_make_call(
             call_id: call_id.clone(),
             dialog,
             webrtc_session: Some(webrtc_session),
+            cancel_token: call_cancel_token,
         });
     }
 
@@ -297,10 +327,23 @@ pub async fn handle_hangup(handle: &SipClientHandle) -> rsipstack::Result<()> {
     if let Some(mut call) = active.take() {
         info!(call_id = %call.call_id, "Hanging up call");
 
-        // Stop audio first
+        // Cancel the call token first to trigger cleanup
+        call.cancel_token.cancel();
+
+        // Stop audio
         if let Some(ref mut session) = call.webrtc_session {
-            session.close();
+            session.close().await;
         }
+
+        // Get dialog ID before moving
+        let dialog_id = match &call.dialog {
+            rsipstack::dialog::dialog::Dialog::ClientInvite(d) => d.id().to_string(),
+            rsipstack::dialog::dialog::Dialog::ServerInvite(d) => d.id().to_string(),
+            _ => call.call_id.clone(),
+        };
+
+        // Remove from active_call_tokens
+        handle.active_call_tokens.remove(&dialog_id);
 
         match call.dialog {
             rsipstack::dialog::dialog::Dialog::ClientInvite(d) => {
@@ -309,8 +352,14 @@ pub async fn handle_hangup(handle: &SipClientHandle) -> rsipstack::Result<()> {
                     rsipstack::Error::Error(format!("Failed to send BYE: {:?}", e))
                 })?;
             }
+            rsipstack::dialog::dialog::Dialog::ServerInvite(d) => {
+                d.bye().await.map_err(|e| {
+                    error!(call_id = %call.call_id, error = ?e, "Failed to send BYE");
+                    rsipstack::Error::Error(format!("Failed to send BYE: {:?}", e))
+                })?;
+            }
             _ => {
-                debug!(call_id = %call.call_id, "Non-client-invite dialog, skipping BYE");
+                debug!(call_id = %call.call_id, "Other dialog type, skipping BYE");
             }
         }
         info!(call_id = %call.call_id, "Call hung up");
@@ -354,6 +403,7 @@ pub async fn handle_answer_call(
     call_id: String,
     input_device: Option<String>,
     output_device: Option<String>,
+    global_cancel_token: CancellationToken,
 ) -> rsipstack::Result<()> {
     info!(call_id = %call_id, "Answering incoming call");
 
@@ -367,7 +417,7 @@ pub async fn handle_answer_call(
         rsipstack::Error::Error(format!("No pending call found for call_id: {}", call_id))
     })?;
 
-    // Create inbound WebRTC session from SDP offer
+    // Create inbound WebRTC session with RTP+ICE (automatic STUN)
     let (mut webrtc_session, sdp_answer) = WebRtcSession::new_inbound(
         &pending_call.sdp_offer,
         input_device.as_deref(),
@@ -376,16 +426,41 @@ pub async fn handle_answer_call(
     .await
     .map_err(|e| rsipstack::Error::Error(format!("Failed to create WebRTC session: {}", e)))?;
 
-    info!(call_id = %call_id, "WebRTC session created, sending 200 OK");
+    info!(call_id = %call_id, "WebRTC session created, starting audio capture before 200 OK");
+
+    // Start audio capture BEFORE sending 200 OK to ensure we send RTP first
+    // This allows NAT to create a mapping before PBX starts sending
+    webrtc_session
+        .start_inbound_media_early(&pending_call.sdp_offer)
+        .await
+        .map_err(|e| rsipstack::Error::Error(format!("Failed to start audio capture: {}", e)))?;
+
+    info!(call_id = %call_id, "Audio capture started, now sending 200 OK");
+
+    // Destructure pending_call to get dialog
+    let PendingCall { dialog, sdp_offer: _ } = pending_call;
 
     // Accept the dialog with SDP answer
-    match pending_call.dialog {
+    match dialog {
         rsipstack::dialog::dialog::Dialog::ServerInvite(d) => {
-            d.accept(None, Some(sdp_answer.into_bytes()))
+            // Create child token from global cancel token
+            let call_cancel_token = global_cancel_token.child_token();
+            let dialog_id = d.id().to_string();
+
+            // Prepare ContentType header for SDP answer
+            let headers = vec![rsip::typed::ContentType(rsip::typed::MediaType::Sdp(vec![])).into()];
+
+            d.accept(Some(headers), Some(sdp_answer.into_bytes()))
                 .map_err(|e| {
                     error!(call_id = %call_id, error = ?e, "Failed to send 200 OK");
                     rsipstack::Error::Error(format!("Failed to accept call: {:?}", e))
                 })?;
+
+            info!(call_id = %call_id, "200 OK sent successfully");
+
+            // Register token before storing active call
+            handle.active_call_tokens.insert(dialog_id.clone(), call_cancel_token.clone());
+            debug!(call_id = %call_id, dialog_id = %dialog_id, "Registered call cancellation token (child of global)");
 
             // Store active call
             {
@@ -393,15 +468,16 @@ pub async fn handle_answer_call(
                 *active = Some(ActiveCall {
                     call_id: call_id.clone(),
                     dialog: rsipstack::dialog::dialog::Dialog::ServerInvite(d),
-                    webrtc_session: None, // Will be set after media starts
+                    webrtc_session: None, // Will be set after playback starts
+                    cancel_token: call_cancel_token,
                 });
             }
 
-            // Start media (wait for ACK and connection)
+            // Start playback (audio capture already started before 200 OK)
             webrtc_session
-                .start_inbound_media(&pending_call.sdp_offer, output_device.as_deref())
+                .start_inbound_playback(&pending_call.sdp_offer, output_device.as_deref())
                 .await
-                .map_err(|e| rsipstack::Error::Error(format!("Failed to start media: {}", e)))?;
+                .map_err(|e| rsipstack::Error::Error(format!("Failed to start playback: {}", e)))?;
 
             // Update active call with WebRTC session
             {
