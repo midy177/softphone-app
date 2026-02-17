@@ -15,7 +15,8 @@
         "title": "SIP 软电话",
         "width": 380,
         "height": 512,
-        "resizable": false
+        "resizable": false,
+        "theme": "Dark"
       }
     ],
     "security": {
