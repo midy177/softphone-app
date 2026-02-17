@@ -307,7 +307,7 @@ impl WebRtcSession {
             sdp_len = sdp_string.len(),
             "SDP offer created with ICE candidates"
         );
-        info!(sdp_offer = %sdp_string, "Local SDP offer content");
+        debug!(sdp_offer = %sdp_string, "Local SDP offer content");
 
         // Verify we have ICE candidates
         let candidates = pc.ice_transport().local_candidates();
