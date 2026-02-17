@@ -115,13 +115,7 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply text-foreground;
-    background: linear-gradient(
-      135deg,
-      oklch(0.20 0.08 270) 0%,
-      oklch(0.18 0.10 250) 50%,
-      oklch(0.16 0.12 240) 100%
-    );
+    @apply bg-background text-foreground;
     min-height: 100vh;
     overflow: hidden;
   }
