@@ -99,7 +99,9 @@ async fn try_call_with_mode(
 
     // Send INVITE and wait for response
     info!(call_id = %call_id, srtp = prefer_srtp, "Sending INVITE");
-    let (dialog, resp) = dialog_layer.do_invite(invite_option.clone(), state_sender).await?;
+    let (dialog, resp) = dialog_layer
+        .do_invite(invite_option.clone(), state_sender)
+        .await?;
     let resp = resp.ok_or(Error::Error("No response from remote".to_string()))?;
 
     if resp.status_code != rsip::StatusCode::OK {
@@ -110,10 +112,7 @@ async fn try_call_with_mode(
             "Call rejected by remote"
         );
         session.close().await;
-        return Err(Error::Error(format!(
-            "Call rejected: {}",
-            resp.status_code
-        )));
+        return Err(Error::Error(format!("Call rejected: {}", resp.status_code)));
     }
 
     info!(call_id = %call_id, callee = %callee, "Call answered (200 OK)");

@@ -13,6 +13,11 @@ const router = createRouter({
       name: 'dialpad',
       component: () => import('@/pages/DialPadPage.vue'),
     },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('@/pages/SettingsPage.vue'),
+    },
   ],
 })
 

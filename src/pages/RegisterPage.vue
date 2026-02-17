@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { toast } from 'vue-sonner'
+import { Settings } from 'lucide-vue-next'
 
 const STORAGE_KEY = 'sip-config'
 
@@ -168,7 +169,12 @@ async function handleRegister() {
   <div class="flex h-screen items-center justify-center p-4 overflow-y-auto">
     <Card class="w-full max-w-md">
       <CardHeader>
-        <CardTitle class="text-center text-2xl">SIP 软电话</CardTitle>
+        <div class="flex items-center justify-between">
+          <CardTitle class="text-2xl">SIP 软电话</CardTitle>
+          <Button variant="ghost" size="sm" @click="router.push('/settings')">
+            <Settings class="h-4 w-4" />
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         <form class="space-y-4" @submit.prevent="handleRegister">

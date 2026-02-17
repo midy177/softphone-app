@@ -2,7 +2,6 @@
 ///
 /// Directly uses audio-codec's CodecType to support all available codecs:
 /// PCMU, PCMA, G722, G729, Opus, etc.
-
 pub use audio_codec::CodecType;
 use audio_codec::{create_decoder, create_encoder};
 
@@ -253,10 +252,22 @@ mod tests {
     #[test]
     fn test_codec_extensions() {
         // Test from_payload_type
-        assert_eq!(<CodecType as CodecTypeExt>::from_payload_type(0), Some(CodecType::PCMU));
-        assert_eq!(<CodecType as CodecTypeExt>::from_payload_type(8), Some(CodecType::PCMA));
-        assert_eq!(<CodecType as CodecTypeExt>::from_payload_type(9), Some(CodecType::G722));
-        assert_eq!(<CodecType as CodecTypeExt>::from_payload_type(111), Some(CodecType::Opus));
+        assert_eq!(
+            <CodecType as CodecTypeExt>::from_payload_type(0),
+            Some(CodecType::PCMU)
+        );
+        assert_eq!(
+            <CodecType as CodecTypeExt>::from_payload_type(8),
+            Some(CodecType::PCMA)
+        );
+        assert_eq!(
+            <CodecType as CodecTypeExt>::from_payload_type(9),
+            Some(CodecType::G722)
+        );
+        assert_eq!(
+            <CodecType as CodecTypeExt>::from_payload_type(111),
+            Some(CodecType::Opus)
+        );
 
         // Test to_payload_type
         assert_eq!(CodecType::PCMU.to_payload_type(), 0);

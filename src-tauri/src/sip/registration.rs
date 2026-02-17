@@ -9,10 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
 
 /// Perform a single REGISTER request, returns expires value on success
-pub async fn register_once(
-    registration: &mut Registration,
-    sip_server: rsip::Uri,
-) -> Result<u64> {
+pub async fn register_once(registration: &mut Registration, sip_server: rsip::Uri) -> Result<u64> {
     let resp = registration.register(sip_server.clone(), None).await?;
 
     if resp.status_code != rsip::StatusCode::OK {
@@ -28,10 +25,7 @@ pub async fn register_once(
 }
 
 /// Send REGISTER with expires=0 to unregister
-pub async fn unregister(
-    registration: &mut Registration,
-    sip_server: rsip::Uri,
-) -> Result<()> {
+pub async fn unregister(registration: &mut Registration, sip_server: rsip::Uri) -> Result<()> {
     info!(server = %sip_server, "Sending unregister (expires=0)");
     registration.register(sip_server.clone(), Some(0)).await?;
     info!(server = %sip_server, "Unregistered successfully");

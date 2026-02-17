@@ -1,11 +1,11 @@
-use rsip::prelude::HeadersExt;
 use rsip::headers::UntypedHeader;
+use rsip::prelude::HeadersExt;
+use rsipstack::dialog::dialog::DialogStateSender;
 use rsipstack::dialog::dialog_layer::DialogLayer;
 use rsipstack::transaction::TransactionReceiver;
 use rsipstack::{Error, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
-use rsipstack::dialog::dialog::DialogStateSender;
 use tauri::Emitter;
 use tracing::{debug, info, warn};
 
@@ -22,7 +22,9 @@ pub async fn process_incoming_request(
 ) -> Result<()> {
     while let Some(mut tx) = incoming.recv().await {
         let method = tx.original.method.to_string();
-        let call_id = tx.original.call_id_header()
+        let call_id = tx
+            .original
+            .call_id_header()
             .map(|h| h.value().to_string())
             .unwrap_or("no_call_id".to_string());
 
@@ -55,7 +57,9 @@ pub async fn process_incoming_request(
                     // Check if we already have an active call with this call_id
                     let already_active = {
                         let active = active_call.lock().await;
-                        active.as_ref().map_or(false, |call| call.call_id == call_id)
+                        active
+                            .as_ref()
+                            .map_or(false, |call| call.call_id == call_id)
                     };
 
                     if already_active {
@@ -75,13 +79,17 @@ pub async fn process_incoming_request(
                     }
 
                     // Extract caller information
-                    let caller = tx.original.from_header()
+                    let caller = tx
+                        .original
+                        .from_header()
                         .ok()
                         .and_then(|h| h.uri().ok())
                         .map(|uri| uri.to_string())
                         .unwrap_or_else(|| "Unknown".to_string());
 
-                    let callee = tx.original.to_header()
+                    let callee = tx
+                        .original
+                        .to_header()
                         .ok()
                         .and_then(|h| h.uri().ok())
                         .map(|uri| uri.to_string());
@@ -90,7 +98,7 @@ pub async fn process_incoming_request(
                     let sdp_offer = String::from_utf8_lossy(&tx.original.body).to_string();
 
                     info!(call_id = %call_id, caller = %caller, "Received incoming INVITE");
-                    info!(call_id = %call_id, sdp_offer = %sdp_offer, "Incoming SDP offer content");
+                    debug!(call_id = %call_id, sdp_offer = %sdp_offer, "Incoming SDP offer content");
 
                     // Create server dialog but don't respond yet - wait for user action
                     let dialog = match dialog_layer.get_or_create_server_invite(
@@ -113,10 +121,15 @@ pub async fn process_incoming_request(
                     // Store pending call with dialog clone (will be used for ringing/accept later)
                     {
                         let mut pending = pending_incoming.lock().await;
-                        pending.insert(call_id.clone(), PendingCall {
-                            dialog: rsipstack::dialog::dialog::Dialog::ServerInvite(dialog.clone()),
-                            sdp_offer: sdp_offer.clone(),
-                        });
+                        pending.insert(
+                            call_id.clone(),
+                            PendingCall {
+                                dialog: rsipstack::dialog::dialog::Dialog::ServerInvite(
+                                    dialog.clone(),
+                                ),
+                                sdp_offer: sdp_offer.clone(),
+                            },
+                        );
                     }
 
                     // Spawn task to handle transaction - this is critical for SIP message handling

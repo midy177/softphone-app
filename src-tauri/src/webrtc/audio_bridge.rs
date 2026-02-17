@@ -127,14 +127,14 @@ impl AudioBridge {
     pub fn toggle_mic_mute(&self) -> bool {
         let prev = self.mic_muted.fetch_xor(true, Ordering::Relaxed);
         let new_state = !prev;
-        debug!(muted = new_state, "Mic mute toggled");
+        info!(muted = new_state, "Microphone mute toggled");
         new_state
     }
 
     pub fn toggle_speaker_mute(&self) -> bool {
         let prev = self.speaker_muted.fetch_xor(true, Ordering::Relaxed);
         let new_state = !prev;
-        debug!(muted = new_state, "Speaker mute toggled");
+        info!(muted = new_state, "Speaker mute toggled");
         new_state
     }
 
@@ -153,10 +153,7 @@ impl Drop for AudioBridge {
 }
 
 /// Find a cpal device by its ID string (format: "host:device_id").
-fn find_device_by_id(
-    host: &cpal::Host,
-    id_str: &str,
-) -> Result<cpal::Device, String> {
+fn find_device_by_id(host: &cpal::Host, id_str: &str) -> Result<cpal::Device, String> {
     let device_id: DeviceId = id_str
         .parse()
         .map_err(|e| format!("Invalid device ID '{}': {}", id_str, e))?;
@@ -178,7 +175,10 @@ fn setup_capture_stream(
 
     let device_sample_rate = supported_config.sample_rate();
     let channels = supported_config.channels() as usize;
-    debug!(sample_rate = device_sample_rate, channels, "Input device config");
+    debug!(
+        sample_rate = device_sample_rate,
+        channels, "Input device config"
+    );
 
     let stream_config = StreamConfig {
         channels: supported_config.channels(),
@@ -328,14 +328,15 @@ fn setup_capture_stream(
 
             // Resample if needed (device rate → codec rate)
             let pcm_f32 = if let Some(ref mut resampler) = resampler {
-                use rubato::Resampler;
                 use audioadapter_buffers::owned::InterleavedOwned;
+                use rubato::Resampler;
 
                 let input = InterleavedOwned::new_from(
                     device_buf[..needed].to_vec(),
                     1, // single channel
                     needed,
-                ).expect("Failed to create input buffer");
+                )
+                .expect("Failed to create input buffer");
 
                 match resampler.process(&input, 0, None) {
                     Ok(output) => output.take_data(),
@@ -391,7 +392,10 @@ fn setup_playback_stream(
 
     let device_sample_rate = supported_config.sample_rate();
     let channels = supported_config.channels() as usize;
-    debug!(sample_rate = device_sample_rate, channels, "Output device config");
+    debug!(
+        sample_rate = device_sample_rate,
+        channels, "Output device config"
+    );
 
     let stream_config = StreamConfig {
         channels: supported_config.channels(),
@@ -415,6 +419,8 @@ fn setup_playback_stream(
     tokio::spawn(async move {
         let needs_resample = device_sample_rate != codec_sample_rate;
         let mut frame_count = 0u64;
+        let mut skipped_frames = 0u64;
+        let mut last_report_time = std::time::Instant::now();
 
         let mut resampler = if needs_resample {
             Some(
@@ -438,8 +444,8 @@ fn setup_playback_stream(
                     match result {
                         Ok(MediaSample::Audio(frame)) => {
                             frame_count += 1;
-                            if frame_count == 1 || frame_count % 50 == 0 {
-                                info!(frame_count, bytes = frame.data.len(), timestamp = frame.rtp_timestamp, "Received audio frame from remote");
+                            if frame_count == 1 {
+                                info!(bytes = frame.data.len(), timestamp = frame.rtp_timestamp, "Started receiving audio frames from remote");
                             }
                             if muted.load(Ordering::Relaxed) {
                                 continue;
@@ -447,7 +453,7 @@ fn setup_playback_stream(
 
                             // Skip frames that are too small (likely STUN packets misidentified as RTP)
                             if frame.data.len() < 10 {
-                                warn!(bytes = frame.data.len(), "Skipping small frame (possibly STUN packet)");
+                                debug!(bytes = frame.data.len(), "Skipping small frame (possibly STUN packet)");
                                 continue;
                             }
 
@@ -456,7 +462,19 @@ fn setup_playback_stream(
 
                             // Skip if decoded data is too small
                             if pcm_i16.len() < frame_samples {
-                                warn!(actual = pcm_i16.len(), expected = frame_samples, "Decoded frame too small, skipping");
+                                skipped_frames += 1;
+                                debug!(actual = pcm_i16.len(), expected = frame_samples, "Decoded frame too small, skipping");
+
+                                // Report statistics every 5 seconds
+                                if last_report_time.elapsed().as_secs() >= 5 && skipped_frames > 0 {
+                                    warn!(
+                                        skipped = skipped_frames,
+                                        total = frame_count,
+                                        rate = format!("{:.1}%", (skipped_frames as f64 / frame_count as f64) * 100.0),
+                                        "Audio frame quality report: some frames were too small and skipped"
+                                    );
+                                    last_report_time = std::time::Instant::now();
+                                }
                                 continue;
                             }
 
@@ -496,13 +514,21 @@ fn setup_playback_stream(
                         }
                         Ok(_) => {}
                         Err(_) => {
-                            debug!("Remote track ended");
+                            info!(
+                                total_frames = frame_count,
+                                skipped_frames,
+                                "Remote track ended, audio playback session complete"
+                            );
                             break;
                         }
                     }
                 }
                 _ = stop.notified() => {
-                    debug!("Playback task stopping");
+                    info!(
+                        total_frames = frame_count,
+                        skipped_frames,
+                        "Playback task stopping, audio session complete"
+                    );
                     break;
                 }
             }

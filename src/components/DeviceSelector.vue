@@ -7,7 +7,7 @@ import {
   SelectItem,
   SelectTrigger,
 } from '@/components/ui/select'
-import type { MediaDevice } from '@/composables/useWebRTC'
+import type { MediaDevice } from '@/composables/useAudio'
 
 const props = defineProps<{
   label: string

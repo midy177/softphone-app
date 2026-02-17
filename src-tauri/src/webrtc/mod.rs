@@ -2,7 +2,10 @@ pub mod audio_bridge;
 pub mod codec;
 
 use rustrtc::config::MediaCapabilities;
-use rustrtc::{AudioCapability, MediaKind, PeerConnection, RtcConfiguration, RtpCodecParameters, SdpType, SessionDescription, TransportMode};
+use rustrtc::{
+    AudioCapability, MediaKind, PeerConnection, RtcConfiguration, RtpCodecParameters, SdpType,
+    SessionDescription, TransportMode,
+};
 use tracing::{debug, info, warn};
 
 use audio_bridge::AudioBridge;
@@ -51,7 +54,6 @@ fn detect_srtp_from_sdp(sdp: &str) -> bool {
 
     false
 }
-
 
 /// Build RFC 4733 telephone-event RTP payload (4 bytes).
 ///
@@ -110,14 +112,14 @@ fn create_rtp_ice_config(transport_mode: TransportMode) -> RtcConfiguration {
                 AudioCapability::pcmu(),
                 AudioCapability::pcma(),
                 AudioCapability::g722(),
-                AudioCapability::opus(),
                 AudioCapability::g729(),
+                AudioCapability::opus(),
                 AudioCapability::telephone_event(),
             ],
             video: vec![],
             application: None,
         }),
-        enable_latching: true,     // 启用 RTP latching
+        enable_latching: true, // 启用 RTP latching
         // 注意：不设置 rtp_start_port/rtp_end_port，让操作系统动态分配端口
         // 这样 ICE gathering 可以正常工作
         ..Default::default()
@@ -165,11 +167,11 @@ fn replace_with_public_address(sdp: &str, public_ip: &str, public_port: u16) -> 
         else if line.starts_with("a=ice-")
             || line.starts_with("a=candidate:")
             || line.starts_with("a=end-of-candidates")
-            || line.starts_with("a=rtcp-mux") {
+            || line.starts_with("a=rtcp-mux")
+        {
             // Skip ICE and RTCP-mux attributes
             continue;
-        }
-        else {
+        } else {
             result.push(line.to_string());
         }
     }
@@ -201,12 +203,7 @@ async fn start_audio(
     negotiated: &NegotiatedCodec,
 ) -> Result<(), String> {
     info!("Waiting for RTP connection...");
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        pc.wait_for_connected(),
-    )
-    .await
-    {
+    match tokio::time::timeout(std::time::Duration::from_secs(10), pc.wait_for_connected()).await {
         Ok(Ok(_)) => info!("RTP connection established"),
         Ok(Err(e)) => return Err(format!("Connection failed: {}", e)),
         Err(_) => return Err("Connection timed out".to_string()),
@@ -265,13 +262,15 @@ impl WebRtcSession {
             TransportMode::Rtp
         };
 
-        info!(srtp = prefer_srtp, "Creating outbound WebRTC session with ICE");
+        info!(
+            srtp = prefer_srtp,
+            "Creating outbound WebRTC session with ICE"
+        );
 
         let pc = PeerConnection::new(create_rtp_ice_config(transport_mode));
 
         // Create audio bridge (validates devices, creates track, but does NOT start capture)
-        let (audio_bridge, send_track) =
-            AudioBridge::new(input_device, output_device)?;
+        let (audio_bridge, send_track) = AudioBridge::new(input_device, output_device)?;
 
         // Add the capture track to PeerConnection with PCMU codec parameters
         let params = RtpCodecParameters {
@@ -303,14 +302,24 @@ impl WebRtcSession {
         let sdp_string = offer.to_sdp_string();
 
         let uses_srtp = detect_srtp_from_sdp(&sdp_string);
-        info!(srtp = uses_srtp, sdp_len = sdp_string.len(), "SDP offer created with ICE candidates");
+        info!(
+            srtp = uses_srtp,
+            sdp_len = sdp_string.len(),
+            "SDP offer created with ICE candidates"
+        );
         info!(sdp_offer = %sdp_string, "Local SDP offer content");
 
         // Verify we have ICE candidates
         let candidates = pc.ice_transport().local_candidates();
-        let srflx_count = candidates.iter().filter(|c| {
-            matches!(c.typ, rustrtc::transports::ice::IceCandidateType::ServerReflexive)
-        }).count();
+        let srflx_count = candidates
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.typ,
+                    rustrtc::transports::ice::IceCandidateType::ServerReflexive
+                )
+            })
+            .count();
         info!(
             total_candidates = candidates.len(),
             server_reflexive = srflx_count,
@@ -372,13 +381,15 @@ impl WebRtcSession {
 
         // Check if remote offer has ICE attributes
         let remote_has_ice = sdp_offer.contains("a=ice-ufrag") && sdp_offer.contains("a=ice-pwd");
-        info!(remote_has_ice = remote_has_ice, "Checking remote ICE support");
+        info!(
+            remote_has_ice = remote_has_ice,
+            "Checking remote ICE support"
+        );
 
         let pc = PeerConnection::new(create_rtp_ice_config(transport_mode));
 
         // Create audio bridge (validates devices, creates track, but does NOT start capture)
-        let (audio_bridge, send_track) =
-            AudioBridge::new(input_device, output_device)?;
+        let (audio_bridge, send_track) = AudioBridge::new(input_device, output_device)?;
 
         // Add the capture track to PeerConnection with negotiated codec parameters
         let params = RtpCodecParameters {
@@ -438,17 +449,29 @@ impl WebRtcSession {
 
         // Step 5: Extract server-reflexive candidate (public IP:port)
         let candidates = pc.ice_transport().local_candidates();
-        let srflx_count = candidates.iter().filter(|c| {
-            matches!(c.typ, rustrtc::transports::ice::IceCandidateType::ServerReflexive)
-        }).count();
+        let srflx_count = candidates
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.typ,
+                    rustrtc::transports::ice::IceCandidateType::ServerReflexive
+                )
+            })
+            .count();
         info!(
             total_candidates = candidates.len(),
             server_reflexive = srflx_count,
             "ICE candidates collected"
         );
 
-        let public_addr = candidates.iter()
-            .find(|c| matches!(c.typ, rustrtc::transports::ice::IceCandidateType::ServerReflexive))
+        let public_addr = candidates
+            .iter()
+            .find(|c| {
+                matches!(
+                    c.typ,
+                    rustrtc::transports::ice::IceCandidateType::ServerReflexive
+                )
+            })
             .map(|c| {
                 let ip = c.address.ip().to_string();
                 let port = c.address.port();
@@ -471,7 +494,8 @@ impl WebRtcSession {
                     if line.starts_with("a=ice-")
                         || line.starts_with("a=candidate:")
                         || line.starts_with("a=end-of-candidates")
-                        || line.starts_with("a=rtcp-mux") {
+                        || line.starts_with("a=rtcp-mux")
+                    {
                         continue;
                     }
                     if line.starts_with("a=sendonly") {
@@ -488,7 +512,7 @@ impl WebRtcSession {
         };
 
         info!(sdp_len = final_sdp.len(), "SDP answer created");
-        info!(sdp_answer = %final_sdp, "Local SDP answer content");
+        debug!(sdp_answer = %final_sdp, "Local SDP answer content");
 
         let session = WebRtcSession {
             pc,
@@ -502,10 +526,7 @@ impl WebRtcSession {
 
     /// Start audio capture early (before sending 200 OK) to trigger NAT mapping.
     /// This allows RTP packets to be sent before PBX starts sending, ensuring NAT works.
-    pub async fn start_inbound_media_early(
-        &mut self,
-        sdp_offer: &str,
-    ) -> Result<(), String> {
+    pub async fn start_inbound_media_early(&mut self, sdp_offer: &str) -> Result<(), String> {
         // Parse negotiated codec from SDP offer
         let negotiated = codec::parse_negotiated_codec(sdp_offer);
 
@@ -548,7 +569,8 @@ impl WebRtcSession {
                 if let Some(receiver) = t.receiver() {
                     let remote_track = receiver.track();
                     info!("Got remote track, starting playback...");
-                    self.audio_bridge.start_playback(output_device, remote_track, &negotiated)?;
+                    self.audio_bridge
+                        .start_playback(output_device, remote_track, &negotiated)?;
                     info!("Audio playback started");
                     break;
                 } else {
@@ -590,7 +612,10 @@ impl WebRtcSession {
             .await
             .map_err(|e| format!("Failed to set remote description: {}", e))?;
 
-        info!(srtp = remote_uses_srtp, "Remote SDP answer applied, waiting for connection...");
+        info!(
+            srtp = remote_uses_srtp,
+            "Remote SDP answer applied, waiting for connection..."
+        );
 
         start_audio(&self.pc, &mut self.audio_bridge, output_device, &negotiated).await
     }

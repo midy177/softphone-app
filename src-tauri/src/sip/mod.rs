@@ -1,7 +1,8 @@
 use crate::sip::helpers::{
     create_transport_connection, extract_protocol_from_uri, get_first_non_loopback_interface,
 };
-use crate::sip::state::{SipClientHandle, ActiveCall, PendingCall};
+use crate::sip::message_inspector::SipFlow;
+use crate::sip::state::{ActiveCall, PendingCall, SipClientHandle};
 use dashmap::DashMap;
 use rsip::Uri;
 use rsipstack::dialog::authenticate::Credential;
@@ -24,30 +25,27 @@ mod coming_request;
 mod dialog;
 mod helpers;
 mod make_call;
+pub mod message_inspector;
 mod registration;
 pub mod state;
-mod sip_logger;
 
 pub struct SipClient;
 
 impl SipClient {
     /// Connect to SIP server, perform registration, and return a handle for making calls.
+    ///
+    /// # Parameters
+    /// - `enable_sip_flow`: 是否启用 SIP 消息流记录 (默认 true)
+    /// - `sip_flow_log_dir`: SIP 消息流日志目录 (默认 "logs")
     pub async fn connect(
         app_handle: AppHandle,
         server: String,
         username: String,
         password: String,
         outbound_proxy: Option<String>,
+        enable_sip_flow: Option<bool>,
+        sip_flow_log_dir: Option<String>,
     ) -> rsipstack::Result<(SipClientHandle, CancellationToken)> {
-        // Initialize SIP message logger (only once)
-        static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
-        LOGGER_INIT.call_once(|| {
-            if let Err(e) = sip_logger::init_sip_logger("logs") {
-                error!(error = ?e, "Failed to initialize SIP message logger");
-            } else {
-                info!("SIP message logger initialized: logs/sip_messages.log");
-            }
-        });
         // Parse server URI
         let server_uri_str = if server.starts_with("sip:") || server.starts_with("sips:") {
             server
@@ -126,11 +124,16 @@ impl SipClient {
             create_transport_connection(local_addr, target_sip_addr, cancel_token.clone()).await?;
         transport_layer.add_transport(connection);
 
-        // Create endpoint
+        // Create SIP flow inspector
+        let enable_flow = enable_sip_flow.unwrap_or(false); // 默认关闭
+        let sip_flow = Arc::new(SipFlow::new(sip_flow_log_dir.as_deref(), enable_flow));
+
+        // Create endpoint with SIP flow inspector
         let endpoint = EndpointBuilder::new()
             .with_cancel_token(cancel_token.clone())
             .with_transport_layer(transport_layer)
             .with_user_agent("softphone-app/0.1.0")
+            .with_inspector(Box::new(sip_flow.as_ref().clone()))
             .build();
 
         let credential = Credential {
@@ -205,8 +208,7 @@ impl SipClient {
 
         // Perform initial registration (after endpoint.serve() is running)
         let mut reg = Registration::new(endpoint_inner.clone(), Some(credential.clone()));
-        let initial_expires =
-            registration::register_once(&mut reg, server_uri.clone()).await?;
+        let initial_expires = registration::register_once(&mut reg, server_uri.clone()).await?;
 
         // Emit registration success event
         let _ = app_handle.emit(
@@ -222,26 +224,35 @@ impl SipClient {
         let srv = server_uri.clone();
         let ct = cancel_token.clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(e) =
-                registration::registration_refresh_loop(endpoint_inner, srv, cred, initial_expires, ct)
-                    .await
+            if let Err(e) = registration::registration_refresh_loop(
+                endpoint_inner,
+                srv,
+                cred,
+                initial_expires,
+                ct,
+            )
+            .await
             {
                 error!(error = ?e, "Registration refresh loop error");
             }
         }));
 
-        Ok((SipClientHandle {
-            app_handle,
-            dialog_layer,
-            state_sender,
-            contact,
-            credential,
-            server: server_uri,
-            active_call,
-            pending_incoming,
-            active_call_tokens,
-            _tasks: tasks,
-        }, cancel_token))
+        Ok((
+            SipClientHandle {
+                app_handle,
+                dialog_layer,
+                state_sender,
+                contact,
+                credential,
+                server: server_uri,
+                active_call,
+                pending_incoming,
+                active_call_tokens,
+                sip_flow: Some(sip_flow),
+                _tasks: tasks,
+            },
+            cancel_token,
+        ))
     }
 }
 
@@ -294,7 +305,9 @@ pub async fn handle_make_call(
         rsipstack::dialog::dialog::Dialog::ClientInvite(d) => d.id().to_string(),
         _ => call_id.clone(),
     };
-    handle.active_call_tokens.insert(dialog_id.clone(), call_cancel_token.clone());
+    handle
+        .active_call_tokens
+        .insert(dialog_id.clone(), call_cancel_token.clone());
     debug!(call_id = %call_id, dialog_id = %dialog_id, "Registered call cancellation token (child of global)");
 
     // Store active call with WebRTC session
@@ -438,7 +451,10 @@ pub async fn handle_answer_call(
     info!(call_id = %call_id, "Audio capture started, now sending 200 OK");
 
     // Destructure pending_call to get dialog
-    let PendingCall { dialog, sdp_offer: _ } = pending_call;
+    let PendingCall {
+        dialog,
+        sdp_offer: _,
+    } = pending_call;
 
     // Accept the dialog with SDP answer
     match dialog {
@@ -448,7 +464,8 @@ pub async fn handle_answer_call(
             let dialog_id = d.id().to_string();
 
             // Prepare ContentType header for SDP answer
-            let headers = vec![rsip::typed::ContentType(rsip::typed::MediaType::Sdp(vec![])).into()];
+            let headers =
+                vec![rsip::typed::ContentType(rsip::typed::MediaType::Sdp(vec![])).into()];
 
             d.accept(Some(headers), Some(sdp_answer.into_bytes()))
                 .map_err(|e| {
@@ -459,7 +476,9 @@ pub async fn handle_answer_call(
             info!(call_id = %call_id, "200 OK sent successfully");
 
             // Register token before storing active call
-            handle.active_call_tokens.insert(dialog_id.clone(), call_cancel_token.clone());
+            handle
+                .active_call_tokens
+                .insert(dialog_id.clone(), call_cancel_token.clone());
             debug!(call_id = %call_id, dialog_id = %dialog_id, "Registered call cancellation token (child of global)");
 
             // Store active call
@@ -576,5 +595,52 @@ pub async fn handle_send_dtmf(handle: &SipClientHandle, digit: String) -> Result
         }
     } else {
         Err("No active call".to_string())
+    }
+}
+
+/// Enable SIP message flow logging
+pub fn handle_enable_sip_flow(handle: &SipClientHandle) -> Result<(), String> {
+    if let Some(ref sip_flow) = handle.sip_flow {
+        sip_flow.enable();
+        Ok(())
+    } else {
+        Err("SIP flow not available".to_string())
+    }
+}
+
+/// Disable SIP message flow logging
+pub fn handle_disable_sip_flow(handle: &SipClientHandle) -> Result<(), String> {
+    if let Some(ref sip_flow) = handle.sip_flow {
+        sip_flow.disable();
+        Ok(())
+    } else {
+        Err("SIP flow not available".to_string())
+    }
+}
+
+/// Check if SIP message flow logging is enabled
+pub fn handle_is_sip_flow_enabled(handle: &SipClientHandle) -> Result<bool, String> {
+    if let Some(ref sip_flow) = handle.sip_flow {
+        Ok(sip_flow.is_enabled())
+    } else {
+        Err("SIP flow not available".to_string())
+    }
+}
+
+/// Set SIP flow log directory
+pub fn handle_set_sip_flow_dir(handle: &SipClientHandle, dir: String) -> Result<(), String> {
+    if let Some(ref sip_flow) = handle.sip_flow {
+        sip_flow.set_log_dir(std::path::PathBuf::from(dir))
+    } else {
+        Err("SIP flow not available".to_string())
+    }
+}
+
+/// Get SIP flow log directory
+pub fn handle_get_sip_flow_dir(handle: &SipClientHandle) -> Result<String, String> {
+    if let Some(ref sip_flow) = handle.sip_flow {
+        Ok(sip_flow.get_log_dir().to_string_lossy().to_string())
+    } else {
+        Err("SIP flow not available".to_string())
     }
 }

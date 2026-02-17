@@ -6,37 +6,31 @@ import { useSipCall } from '@/composables/useSipCall'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Separator } from '@/components/ui/separator'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-} from '@/components/ui/select'
 import DialPad from '@/components/DialPad.vue'
 import CallControls from '@/components/CallControls.vue'
 import IncomingCallDialog from '@/components/IncomingCallDialog.vue'
-import { Phone, LogOut, RefreshCw } from 'lucide-vue-next'
+import { Phone, LogOut, Settings } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 
 const router = useRouter()
 const { isRegistered, currentExtension, unregister } = useSipRegistration()
-const { callState, callee, incomingCall, dial, hangup, answerCall, rejectCall, sendDtmf, webrtc } = useSipCall()
+const { callState, callee, incomingCall, dial, hangup, answerCall, rejectCall, sendDtmf, audio } = useSipCall()
 
 const phoneNumber = ref('')
+const dtmfInput = ref('')
 
 onMounted(async () => {
   if (!isRegistered.value) {
     await router.push('/')
     return
   }
-  await webrtc.enumerateDevices()
+  await audio.enumerateDevices()
 })
 
 function onDialPadKey(key: string) {
   if (callState.value === 'connected') {
-    // 通话中发送 DTMF
+    // 通话中发送 DTMF 并显示在输入框
+    dtmfInput.value += key
     sendDtmf(key).catch((e) => {
       toast.error(`发送 DTMF 失败: ${e}`)
     })
@@ -53,6 +47,8 @@ async function handleDial() {
   }
   try {
     await dial(phoneNumber.value)
+    // 拨号成功后清空 DTMF 输入
+    dtmfInput.value = ''
   } catch (e) {
     toast.error(`呼叫失败: ${e}`)
   }
@@ -60,16 +56,26 @@ async function handleDial() {
 
 async function handleHangup() {
   await hangup()
+  // 挂断后清空 DTMF 输入
+  dtmfInput.value = ''
 }
 
 async function handleLogout() {
-  await unregister()
-  await router.push('/')
+  try {
+    await unregister()
+  } catch (e) {
+    console.error('[Logout] Unregister error:', e)
+  } finally {
+    // 无论注销是否成功，都返回登录页
+    await router.replace('/')
+  }
 }
 
 async function handleAnswer() {
   try {
     await answerCall()
+    // 接听成功后清空 DTMF 输入
+    dtmfInput.value = ''
   } catch (e) {
     toast.error(`接听失败: ${e}`)
   }
@@ -81,6 +87,16 @@ async function handleReject() {
   } catch (e) {
     toast.error(`拒绝失败: ${e}`)
   }
+}
+
+async function handleToggleMic() {
+  console.log('[DialPadPage] handleToggleMic called')
+  await audio.toggleMicMute()
+}
+
+async function handleToggleSpeaker() {
+  console.log('[DialPadPage] handleToggleSpeaker called')
+  await audio.toggleSpeakerMute()
 }
 
 const callStateLabel: Record<string, string> = {
@@ -105,13 +121,16 @@ const callStateLabel: Record<string, string> = {
     />
 
     <Card class="w-full border-0 shadow-none bg-transparent backdrop-blur-md rounded-none">
-      <CardHeader class="pb-0">
+      <CardHeader v-if="callState !== 'connected'" class="pb-0">
         <div class="flex items-center justify-between">
           <CardTitle class="text-lg font-bold">拨号面板</CardTitle>
           <div class="flex items-center gap-2">
             <span class="text-md font-bold text-green-600">
               ● 已注册{{ currentExtension ? ` (${currentExtension})` : '' }}
             </span>
+            <Button variant="ghost" size="sm" @click="router.push('/settings')">
+              <Settings class="h-4 w-4" />
+            </Button>
             <Button variant="ghost" size="sm" @click="handleLogout">
               <LogOut class="h-4 w-4" />
             </Button>
@@ -119,68 +138,16 @@ const callStateLabel: Record<string, string> = {
         </div>
       </CardHeader>
 
-      <CardContent class="space-y-4">
-        <!-- Device selectors -->
-        <div v-if="callState !== 'connected'" class="grid grid-cols-2 gap-x-2 gap-y-1">
-          <Label class="text-xs text-muted-foreground">麦克风</Label>
-          <div class="flex items-center justify-between">
-            <Label class="text-xs text-muted-foreground">扬声器</Label>
-            <Button variant="ghost" size="sm" class="h-6 w-6 p-0" @click="webrtc.enumerateDevices()">
-              <RefreshCw class="h-3 w-3" />
-            </Button>
-          </div>
-          <Select :model-value="webrtc.selectedMic.value" @update:model-value="v => webrtc.setMic(v as string | null)">
-            <SelectTrigger class="h-8 text-xs w-full overflow-hidden">
-              <span class="truncate block">
-                {{ webrtc.microphones.value.find(d => d.name === webrtc.selectedMic.value)?.description || '选择麦克风' }}
-              </span>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem
-                v-for="device in webrtc.microphones.value"
-                :key="device.name"
-                :value="device.name"
-              >
-                {{ device.description }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <Select :model-value="webrtc.selectedSpeaker.value" @update:model-value="v => webrtc.setSpeaker(v as string | null)">
-            <SelectTrigger class="h-8 text-xs w-full overflow-hidden">
-              <span class="truncate block">
-                {{ webrtc.speakers.value.find(d => d.name === webrtc.selectedSpeaker.value)?.description || '选择扬声器' }}
-              </span>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem
-                v-for="device in webrtc.speakers.value"
-                :key="device.name"
-                :value="device.name"
-              >
-                {{ device.description }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div v-if="webrtc.deviceError.value && callState !== 'connected'" class="text-xs text-destructive">
-          {{ webrtc.deviceError.value }}
-        </div>
-        <div v-if="!webrtc.microphones.value.length && callState !== 'connected'" class="text-xs text-muted-foreground">
-          未检测到设备
-        </div>
-
-        <Separator />
-
+      <CardContent :class="callState === 'connected' ? 'space-y-2 pt-4' : 'space-y-3'">
         <!-- Phone number input -->
-        <div class="flex gap-2">
+        <div v-if="callState === 'idle'" class="flex gap-2">
           <Input
             v-model="phoneNumber"
             placeholder="输入号码"
             class="text-center text-xl font-mono tracking-wider"
-            :disabled="callState !== 'idle'"
           />
           <Button
-            v-if="phoneNumber && callState === 'idle'"
+            v-if="phoneNumber"
             variant="ghost"
             size="sm"
             class="shrink-0"
@@ -190,9 +157,28 @@ const callStateLabel: Record<string, string> = {
           </Button>
         </div>
 
+        <!-- DTMF input display (during call) -->
+        <div v-if="callState === 'connected'" class="flex gap-2">
+          <Input
+            v-model="dtmfInput"
+            placeholder="DTMF"
+            class="text-center text-xl font-mono tracking-wider"
+            readonly
+          />
+          <Button
+            v-if="dtmfInput"
+            variant="ghost"
+            size="sm"
+            class="shrink-0"
+            @click="dtmfInput = dtmfInput.slice(0, -1)"
+          >
+            ⌫
+          </Button>
+        </div>
+
         <!-- Dial pad -->
         <DialPad
-          v-if="callState === 'idle' || callState === 'connected'"
+          v-if="callState === 'idle'"
           :model-value="phoneNumber"
           @update:model-value="onDialPadKey"
         />
@@ -209,20 +195,27 @@ const callStateLabel: Record<string, string> = {
         </div>
 
         <!-- Call controls -->
-        <div v-if="callState === 'connected'" class="pt-2 space-y-3">
-          <div class="text-center">
-            <p class="text-lg font-medium">
+        <div v-if="callState === 'connected'" class="space-y-2">
+          <div class="text-center py-1">
+            <p class="text-sm font-medium text-muted-foreground">
               {{ callStateLabel[callState] || callState }}
             </p>
-            <p class="text-sm text-muted-foreground">{{ callee || phoneNumber }}</p>
+            <p class="text-base font-medium">{{ callee || phoneNumber }}</p>
           </div>
           <CallControls
-            :is-mic-muted="webrtc.isMicMuted.value"
-            :is-speaker-muted="webrtc.isSpeakerMuted.value"
-            @toggle-mic="webrtc.toggleMicMute()"
-            @toggle-speaker="webrtc.toggleSpeakerMute()"
+            :is-mic-muted="audio.isMicMuted.value"
+            :is-speaker-muted="audio.isSpeakerMuted.value"
+            @toggle-mic="handleToggleMic"
+            @toggle-speaker="handleToggleSpeaker"
             @hangup="handleHangup"
           />
+          <!-- DTMF 拨号盘 -->
+          <div class="pt-1">
+            <DialPad
+              :model-value="''"
+              @update:model-value="onDialPadKey"
+            />
+          </div>
         </div>
 
         <!-- Dial / Hangup button -->

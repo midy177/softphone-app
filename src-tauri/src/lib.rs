@@ -23,16 +23,24 @@ struct AudioDevices {
 /// Linux-specific: Query PulseAudio/PipeWire for friendly device names.
 /// Returns maps keyed by "card_name:device_num" (compound) and "card_name" (fallback).
 #[cfg(target_os = "linux")]
-fn get_pulse_friendly_names() -> (std::collections::HashMap<String, String>, std::collections::HashMap<String, String>) {
+fn get_pulse_friendly_names() -> (
+    std::collections::HashMap<String, String>,
+    std::collections::HashMap<String, String>,
+) {
+    use pulsectl::controllers::{DeviceControl, SinkController, SourceController};
     use std::collections::HashMap;
-    use pulsectl::controllers::{SinkController, SourceController, DeviceControl};
     use tracing::{debug, info, warn};
 
     let mut input_map = HashMap::new();
     let mut output_map = HashMap::new();
 
     // Helper: insert both compound key "card:dev" and fallback key "card"
-    fn insert_device(map: &mut HashMap<String, String>, card: &str, dev: Option<String>, friendly: String) {
+    fn insert_device(
+        map: &mut HashMap<String, String>,
+        card: &str,
+        dev: Option<String>,
+        friendly: String,
+    ) {
         if let Some(ref d) = dev {
             map.insert(format!("{}:{}", card, d), friendly.clone());
         }
@@ -50,14 +58,16 @@ fn get_pulse_friendly_names() -> (std::collections::HashMap<String, String>, std
                         continue;
                     }
 
-                    let card_name = source.proplist.get_str("alsa.card_name")
+                    let card_name = source
+                        .proplist
+                        .get_str("alsa.card_name")
                         .or_else(|| source.proplist.get_str("device.product.name"));
                     let device_num = source.proplist.get_str("alsa.device");
 
                     if let Some(card) = card_name {
-                        let friendly_name = source.description.unwrap_or_else(|| {
-                            source.name.unwrap_or_default()
-                        });
+                        let friendly_name = source
+                            .description
+                            .unwrap_or_else(|| source.name.unwrap_or_default());
                         debug!(card = %card, dev = ?device_num, friendly = %friendly_name, "PulseAudio source");
                         insert_device(&mut input_map, &card, device_num, friendly_name);
                     }
@@ -74,14 +84,16 @@ fn get_pulse_friendly_names() -> (std::collections::HashMap<String, String>, std
         Ok(mut sink_ctrl) => {
             if let Ok(sinks) = sink_ctrl.list_devices() {
                 for sink in sinks {
-                    let card_name = sink.proplist.get_str("alsa.card_name")
+                    let card_name = sink
+                        .proplist
+                        .get_str("alsa.card_name")
                         .or_else(|| sink.proplist.get_str("device.product.name"));
                     let device_num = sink.proplist.get_str("alsa.device");
 
                     if let Some(card) = card_name {
-                        let friendly_name = sink.description.unwrap_or_else(|| {
-                            sink.name.unwrap_or_default()
-                        });
+                        let friendly_name = sink
+                            .description
+                            .unwrap_or_else(|| sink.name.unwrap_or_default());
                         debug!(card = %card, dev = ?device_num, friendly = %friendly_name, "PulseAudio sink");
                         insert_device(&mut output_map, &card, device_num, friendly_name);
                     }
@@ -107,17 +119,18 @@ fn extract_alsa_card_name(alsa_desc: &str) -> Option<String> {
 /// Extract DEV number from cpal local ID (e.g., "plughw:CARD=PCH,DEV=0" → "0").
 #[cfg(target_os = "linux")]
 fn extract_dev_number(local_id: &str) -> Option<String> {
-    local_id.split("DEV=").nth(1).map(|s| {
-        s.split(&[',', ':']).next().unwrap_or(s).to_string()
-    })
+    local_id
+        .split("DEV=")
+        .nth(1)
+        .map(|s| s.split(&[',', ':']).next().unwrap_or(s).to_string())
 }
 
 #[tauri::command]
 fn enumerate_audio_devices() -> Result<AudioDevices, String> {
     use cpal::traits::{DeviceTrait, HostTrait};
-    use tracing::{info, warn};
+    use tracing::warn;
 
-    info!("Enumerating audio devices");
+    // 枚举音频设备（不打印日志）
 
     // On Linux, get friendly names from PulseAudio/PipeWire
     #[cfg(target_os = "linux")]
@@ -131,7 +144,7 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
 
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
-    let mut skipped_count = 0;
+    let mut _skipped_count = 0;
 
     for device in devices {
         let id = match device.id() {
@@ -147,7 +160,7 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
 
         // Only keep useful devices, skip ALSA virtual plugins
         if !is_useful_device(local_id) {
-            skipped_count += 1;
+            _skipped_count += 1;
             continue;
         }
 
@@ -168,7 +181,8 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
                 let compound_key = dev_num.as_ref().map(|d| format!("{}:{}", card_name, d));
 
                 let resolve = |map: &std::collections::HashMap<String, String>| -> Option<String> {
-                    compound_key.as_ref()
+                    compound_key
+                        .as_ref()
                         .and_then(|k| map.get(k))
                         .or_else(|| map.get(&card_name))
                         .cloned()
@@ -204,18 +218,19 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
         }
     }
 
-    info!(
-        skipped = skipped_count,
-        inputs = inputs.len(),
-        outputs = outputs.len(),
-        "Device enumeration complete"
-    );
-    for d in &inputs {
-        info!(name = %d.name, desc = %d.description, "Input device");
-    }
-    for d in &outputs {
-        info!(name = %d.name, desc = %d.description, "Output device");
-    }
+    // 只在有错误时打印日志
+    // info!(
+    //     skipped = skipped_count,
+    //     inputs = inputs.len(),
+    //     outputs = outputs.len(),
+    //     "Device enumeration complete"
+    // );
+    // for d in &inputs {
+    //     info!(name = %d.name, desc = %d.description, "Input device");
+    // }
+    // for d in &outputs {
+    //     info!(name = %d.name, desc = %d.description, "Output device");
+    // }
 
     Ok(AudioDevices { inputs, outputs })
 }
@@ -268,7 +283,20 @@ async fn sip_register(
         return Err("Already registered".to_string());
     }
 
-    match sip::SipClient::connect(app_handle, server, username, password, outbound_proxy).await {
+    // 获取 SIP flow 配置
+    let sip_flow_config = state.sip_flow_config.lock().await.clone();
+
+    match sip::SipClient::connect(
+        app_handle,
+        server,
+        username,
+        password,
+        outbound_proxy,
+        Some(sip_flow_config.enabled),
+        Some(sip_flow_config.log_dir),
+    )
+    .await
+    {
         Ok((new_handle, cancel_token)) => {
             *state.handle.lock().await = Some(new_handle);
             *state.cancel_token.lock().await = Some(cancel_token);
@@ -295,10 +323,7 @@ async fn sip_unregister(state: State<'_, SipAppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn sip_make_call(
-    state: State<'_, SipAppState>,
-    callee: String,
-) -> Result<(), String> {
+async fn sip_make_call(state: State<'_, SipAppState>, callee: String) -> Result<(), String> {
     let input_device = state.input_device.lock().await.clone();
     let output_device = state.output_device.lock().await.clone();
 
@@ -337,10 +362,7 @@ async fn sip_hangup(state: State<'_, SipAppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn sip_answer_call(
-    state: State<'_, SipAppState>,
-    call_id: String,
-) -> Result<(), String> {
+async fn sip_answer_call(state: State<'_, SipAppState>, call_id: String) -> Result<(), String> {
     let input_device = state.input_device.lock().await.clone();
     let output_device = state.output_device.lock().await.clone();
 
@@ -428,17 +450,72 @@ async fn send_dtmf(state: State<'_, SipAppState>, digit: String) -> Result<(), S
     sip::handle_send_dtmf(handle, digit).await
 }
 
+// ── SIP Flow 配置命令（统一接口，支持注册前后使用）──
+
+/// 设置 SIP 消息日志开关
+#[tauri::command]
+async fn set_sip_flow_enabled(state: State<'_, SipAppState>, enabled: bool) -> Result<(), String> {
+    // 更新配置
+    state.sip_flow_config.lock().await.enabled = enabled;
+
+    // 如果已注册，同时更新运行中的实例
+    let handle_guard = state.handle.lock().await;
+    if let Some(handle) = handle_guard.as_ref() {
+        if enabled {
+            sip::handle_enable_sip_flow(handle)?;
+        } else {
+            sip::handle_disable_sip_flow(handle)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// 设置 SIP 消息日志目录
+#[tauri::command]
+async fn set_sip_flow_dir(state: State<'_, SipAppState>, dir: String) -> Result<(), String> {
+    // 更新配置
+    state.sip_flow_config.lock().await.log_dir = dir.clone();
+
+    // 如果已注册，同时更新运行中的实例
+    let handle_guard = state.handle.lock().await;
+    if let Some(handle) = handle_guard.as_ref() {
+        sip::handle_set_sip_flow_dir(handle, dir)?;
+    }
+
+    Ok(())
+}
+
+/// 获取 SIP 消息日志配置
+#[tauri::command]
+async fn get_sip_flow_config(
+    state: State<'_, SipAppState>,
+) -> Result<sip::state::SipFlowConfig, String> {
+    // 优先从已注册的 handle 获取实际运行状态
+    let handle_guard = state.handle.lock().await;
+    if let Some(handle) = handle_guard.as_ref() {
+        let enabled = sip::handle_is_sip_flow_enabled(handle)?;
+        let log_dir = sip::handle_get_sip_flow_dir(handle)?;
+        Ok(sip::state::SipFlowConfig { enabled, log_dir })
+    } else {
+        // 否则返回配置
+        Ok(state.sip_flow_config.lock().await.clone())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     logging::initialize_logging("info", true);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(SipAppState {
             handle: tokio::sync::Mutex::new(None),
             cancel_token: tokio::sync::Mutex::new(None),
             input_device: tokio::sync::Mutex::new(None),
             output_device: tokio::sync::Mutex::new(None),
+            sip_flow_config: tokio::sync::Mutex::new(sip::state::SipFlowConfig::default()),
         })
         .invoke_handler(tauri::generate_handler![
             enumerate_audio_devices,
@@ -454,6 +531,9 @@ pub fn run() {
             toggle_mic_mute,
             toggle_speaker_mute,
             send_dtmf,
+            set_sip_flow_enabled,
+            set_sip_flow_dir,
+            get_sip_flow_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

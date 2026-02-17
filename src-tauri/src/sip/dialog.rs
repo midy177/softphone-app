@@ -1,8 +1,8 @@
-use std::sync::Arc;
 use dashmap::DashMap;
 use rsipstack::dialog::dialog::{Dialog, DialogState, DialogStateReceiver};
 use rsipstack::dialog::dialog_layer::DialogLayer;
 use rsipstack::Error;
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -33,11 +33,14 @@ pub async fn process_dialog(
                     }
                     Dialog::ClientInvite(_) => {
                         debug!(dialog_id = %id, "Client invite dialog calling");
-                        let _ = app_handle.emit("sip://call-state", CallStatePayload {
-                            state: "calling".to_string(),
-                            call_id: Some(id.to_string()),
-                            reason: None,
-                        });
+                        let _ = app_handle.emit(
+                            "sip://call-state",
+                            CallStatePayload {
+                                state: "calling".to_string(),
+                                call_id: Some(id.to_string()),
+                                reason: None,
+                            },
+                        );
                     }
                     _ => {
                         debug!(dialog_id = %id, "Other dialog type calling");
@@ -52,11 +55,14 @@ pub async fn process_dialog(
                 // because the frontend should already be in 'incoming' state
                 let dialog = dialog_layer.get_dialog(&id);
                 if let Some(Dialog::ClientInvite(_)) = dialog {
-                    let _ = app_handle.emit("sip://call-state", CallStatePayload {
-                        state: "ringing".to_string(),
-                        call_id: Some(id.to_string()),
-                        reason: None,
-                    });
+                    let _ = app_handle.emit(
+                        "sip://call-state",
+                        CallStatePayload {
+                            state: "ringing".to_string(),
+                            call_id: Some(id.to_string()),
+                            reason: None,
+                        },
+                    );
                 }
             }
             DialogState::Terminated(id, reason) => {
@@ -69,11 +75,14 @@ pub async fn process_dialog(
                     token.cancel();
                 }
 
-                let _ = app_handle.emit("sip://call-state", CallStatePayload {
-                    state: "ended".to_string(),
-                    call_id: Some(id.to_string()),
-                    reason: Some(format!("{:?}", reason)),
-                });
+                let _ = app_handle.emit(
+                    "sip://call-state",
+                    CallStatePayload {
+                        state: "ended".to_string(),
+                        call_id: Some(id.to_string()),
+                        reason: Some(format!("{:?}", reason)),
+                    },
+                );
             }
             _ => {
                 debug!(state = %state, "Dialog state changed");

@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { useWebRTC } from './useWebRTC'
+import { useAudio } from './useAudio'
 
 export type CallState = 'idle' | 'calling' | 'ringing' | 'connected' | 'incoming' | 'ended'
 
@@ -62,7 +62,7 @@ async function setupListeners() {
 }
 
 export function useSipCall() {
-  const webrtc = useWebRTC()
+  const audio = useAudio()
 
   // Setup listeners immediately (async) - ensure it only runs once
   if (!setupPromise) {
@@ -169,6 +169,6 @@ export function useSipCall() {
     answerCall,
     rejectCall,
     sendDtmf,
-    webrtc,
+    audio,
   }
 }
