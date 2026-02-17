@@ -275,6 +275,8 @@ pub async fn handle_make_call(
             password: None,
         }),
         host_with_port: handle.server.host_with_port.clone(),
+        // Preserve transport params (e.g. transport=TCP) so rsipstack uses the correct connection
+        params: handle.server.params.clone(),
         ..Default::default()
     };
 

@@ -6,6 +6,7 @@ use rsipstack::transport::{SipAddr, SipConnection};
 use rsipstack::Error;
 use std::net::{IpAddr, SocketAddr};
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 
 /// Protocol enum to represent SIP transport protocols
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +71,28 @@ pub fn extract_protocol_from_uri(uri: &rsip::Uri) -> Protocol {
     Protocol::Udp
 }
 
+/// Resolve the hostname in a SipAddr to an IP address via DNS.
+/// TCP/TLS connections require a resolved SocketAddr; UDP does not.
+async fn resolve_sip_addr(target: &SipAddr) -> rsipstack::Result<SipAddr> {
+    let host_str = target.addr.to_string();
+    // If it already parses as SocketAddr (i.e. it's an IP), return as-is
+    if host_str.parse::<SocketAddr>().is_ok() {
+        return Ok(target.clone());
+    }
+    debug!(host = %host_str, "Resolving hostname via DNS");
+    let mut addrs = tokio::net::lookup_host(&host_str)
+        .await
+        .map_err(|e| Error::Error(format!("DNS resolution failed for '{}': {}", host_str, e)))?;
+    let resolved: SocketAddr = addrs
+        .next()
+        .ok_or_else(|| Error::Error(format!("No address found for '{}'", host_str)))?;
+    debug!(host = %host_str, resolved = %resolved, "DNS resolved");
+    Ok(SipAddr {
+        r#type: target.r#type,
+        addr: resolved.into(),
+    })
+}
+
 /// Create transport connection based on protocol
 pub async fn create_transport_connection(
     local_addr: SocketAddr,
@@ -87,18 +110,21 @@ pub async fn create_transport_connection(
             Ok(SipConnection::Udp(connection))
         }
         Some(rsip::transport::Transport::Tcp) => {
+            let resolved = resolve_sip_addr(&target).await?;
             let connection =
-                TcpConnection::connect(&target, Some(cancel_token.child_token())).await?;
+                TcpConnection::connect(&resolved, Some(cancel_token.child_token())).await?;
             Ok(SipConnection::Tcp(connection))
         }
         Some(rsip::transport::Transport::Tls) => {
+            let resolved = resolve_sip_addr(&target).await?;
             let connection =
-                TlsConnection::connect(&target, None, Some(cancel_token.child_token())).await?;
+                TlsConnection::connect(&resolved, None, Some(cancel_token.child_token())).await?;
             Ok(SipConnection::Tls(connection))
         }
         Some(rsip::transport::Transport::Ws | rsip::transport::Transport::Wss) => {
+            let resolved = resolve_sip_addr(&target).await?;
             let connection =
-                WebSocketConnection::connect(&target, Some(cancel_token.child_token())).await?;
+                WebSocketConnection::connect(&resolved, Some(cancel_token.child_token())).await?;
             Ok(SipConnection::WebSocket(connection))
         }
         _ => Err(Error::TransportLayerError(
