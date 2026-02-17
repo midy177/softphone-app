@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSipRegistration } from '@/composables/useSipRegistration'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -167,16 +167,16 @@ async function handleRegister() {
 
 <template>
   <div class="flex h-screen items-center justify-center p-4 overflow-y-auto">
-    <Card class="w-full max-w-md">
-      <CardHeader>
-        <div class="flex items-center justify-between">
-          <CardTitle class="text-2xl">SIP 软电话</CardTitle>
-          <Button variant="ghost" size="sm" @click="router.push('/settings')">
-            <Settings class="h-4 w-4" />
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
+    <Card class="w-full max-w-md relative">
+      <Button
+        variant="ghost"
+        size="icon"
+        class="absolute top-2 right-2 text-muted-foreground"
+        @click="router.push('/settings')"
+      >
+        <Settings class="h-4 w-4" />
+      </Button>
+      <CardContent class="pt-2">
         <form class="space-y-4" @submit.prevent="handleRegister">
           <!-- 服务器配置 -->
           <div class="space-y-3">
