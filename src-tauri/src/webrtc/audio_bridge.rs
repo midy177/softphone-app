@@ -288,13 +288,14 @@ fn setup_capture_stream(
                 }
             }
 
-            // If mic is muted, send silence
+            // If mic is muted, send encoded silence (proper per-codec representation)
             if mic_muted.load(Ordering::Relaxed) {
-                let silence = vec![0u8; frame_samples];
+                let silence_pcm = vec![0i16; frame_samples];
+                let encoded = codec_type.encode(&silence_pcm);
                 let frame = AudioFrame {
                     rtp_timestamp,
                     clock_rate: codec_sample_rate,
-                    data: Bytes::from(silence),
+                    data: Bytes::from(encoded),
                     ..Default::default()
                 };
                 if audio_source_clone.send_audio(frame).await.is_err() {
@@ -308,11 +309,12 @@ fn setup_capture_stream(
             let available = consumer.occupied_len();
             let needed = device_frame_samples;
             if available < needed {
-                let silence = vec![0u8; frame_samples];
+                let silence_pcm = vec![0i16; frame_samples];
+                let encoded = codec_type.encode(&silence_pcm);
                 let frame = AudioFrame {
                     rtp_timestamp,
                     clock_rate: codec_sample_rate,
-                    data: Bytes::from(silence),
+                    data: Bytes::from(encoded),
                     ..Default::default()
                 };
                 if audio_source_clone.send_audio(frame).await.is_err() {
