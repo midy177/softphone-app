@@ -122,7 +122,15 @@ impl SipClient {
         let local_addr: SocketAddr = format!("{}:0", local_ip).parse()?;
         let connection =
             create_transport_connection(local_addr, target_sip_addr, cancel_token.clone()).await?;
-        transport_layer.add_transport(connection);
+        // UDP is a listening transport (add_transport/add_listener).
+        // TCP/TLS/WS are outbound connections: must use add_connection so that
+        // rsipstack's transport_layer lookup() can find them in the connections
+        // HashMap and reuse them (instead of auto-creating a new TLS connection
+        // without our custom certificate verifier).
+        match protocol {
+            crate::sip::helpers::Protocol::Udp => transport_layer.add_transport(connection),
+            _ => transport_layer.add_connection(connection),
+        }
 
         // Create SIP flow inspector
         let enable_flow = enable_sip_flow.unwrap_or(false); // 默认关闭

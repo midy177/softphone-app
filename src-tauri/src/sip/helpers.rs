@@ -4,9 +4,66 @@ use rsipstack::transport::udp::UdpConnection;
 use rsipstack::transport::websocket::WebSocketConnection;
 use rsipstack::transport::{SipAddr, SipConnection};
 use rsipstack::Error;
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::crypto::{ring::default_provider, verify_tls12_signature, verify_tls13_signature};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{DigitallySignedStruct, SignatureScheme};
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
+
+/// TLS verifier that skips certificate chain validation (accepts self-signed certs).
+/// Signature verification is still performed to prevent MITM attacks.
+#[derive(Debug)]
+struct SkipCertVerifier;
+
+impl ServerCertVerifier for SkipCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &default_provider().signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &default_provider().signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
 
 /// Protocol enum to represent SIP transport protocols
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,14 +174,14 @@ pub async fn create_transport_connection(
         }
         Some(rsip::transport::Transport::Tls) => {
             let resolved = resolve_sip_addr(&target).await?;
+            let verifier = Arc::new(SkipCertVerifier);
             let connection =
-                TlsConnection::connect(&resolved, None, Some(cancel_token.child_token())).await?;
+                TlsConnection::connect(&resolved, Some(verifier), Some(cancel_token.child_token())).await?;
             Ok(SipConnection::Tls(connection))
         }
         Some(rsip::transport::Transport::Ws | rsip::transport::Transport::Wss) => {
-            let resolved = resolve_sip_addr(&target).await?;
             let connection =
-                WebSocketConnection::connect(&resolved, Some(cancel_token.child_token())).await?;
+                WebSocketConnection::connect(&target, Some(cancel_token.child_token())).await?;
             Ok(SipConnection::WebSocket(connection))
         }
         _ => Err(Error::TransportLayerError(
