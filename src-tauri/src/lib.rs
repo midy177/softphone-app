@@ -2,6 +2,7 @@ mod logging;
 mod sip;
 mod webrtc;
 
+use rustls;
 use sip::state::SipAppState;
 use tauri::State;
 use tracing::error;
@@ -505,6 +506,10 @@ async fn get_sip_flow_config(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Install ring as the default rustls CryptoProvider before any TLS operations.
+    // Required in rustls 0.23+ when multiple crypto features could be available.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     logging::initialize_logging("info", true);
 
     tauri::Builder::default()

@@ -1,7 +1,8 @@
+use futures_util::StreamExt;
 use rsipstack::transport::tcp::TcpConnection;
 use rsipstack::transport::tls::TlsConnection;
 use rsipstack::transport::udp::UdpConnection;
-use rsipstack::transport::websocket::WebSocketConnection;
+use rsipstack::transport::websocket::{WebSocketConnection, WebSocketInner};
 use rsipstack::transport::{SipAddr, SipConnection};
 use rsipstack::Error;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -10,6 +11,8 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -155,6 +158,7 @@ pub async fn create_transport_connection(
     local_addr: SocketAddr,
     target: SipAddr,
     cancel_token: CancellationToken,
+    ws_path: Option<String>,
 ) -> rsipstack::Result<SipConnection> {
     match target.r#type {
         Some(rsip::transport::Transport::Udp) => {
@@ -173,14 +177,16 @@ pub async fn create_transport_connection(
             Ok(SipConnection::Tcp(connection))
         }
         Some(rsip::transport::Transport::Tls) => {
+            let resolve = resolve_sip_addr(&target).await?;
             let verifier = Arc::new(SkipCertVerifier);
             let connection =
-                TlsConnection::connect(&target, Some(verifier), Some(cancel_token.child_token())).await?;
+                TlsConnection::connect(&resolve, Some(verifier), Some(cancel_token.child_token())).await?;
             Ok(SipConnection::Tls(connection))
         }
         Some(rsip::transport::Transport::Ws | rsip::transport::Transport::Wss) => {
+            let resolve = resolve_sip_addr(&target).await?;
             let connection =
-                WebSocketConnection::connect(&target, Some(cancel_token.child_token())).await?;
+                create_websocket_connection(&resolve, ws_path.as_deref(), Some(cancel_token.child_token())).await?;
             Ok(SipConnection::WebSocket(connection))
         }
         _ => Err(Error::TransportLayerError(
@@ -188,6 +194,58 @@ pub async fn create_transport_connection(
             target.to_owned(),
         )),
     }
+}
+
+/// Manually create a WebSocket connection with a custom path.
+/// rsipstack's WebSocketConnection::connect hardcodes the path to "/", so we
+/// bypass it to support servers that require a specific endpoint path (e.g. "/ws").
+async fn create_websocket_connection(
+    remote: &SipAddr,
+    ws_path: Option<&str>,
+    cancel_token: Option<CancellationToken>,
+) -> rsipstack::Result<WebSocketConnection> {
+    let scheme = match remote.r#type {
+        Some(rsip::transport::Transport::Wss) => "wss",
+        _ => "ws",
+    };
+
+    let host = match &remote.addr.host {
+        rsip::host_with_port::Host::Domain(domain) => domain.to_string(),
+        rsip::host_with_port::Host::IpAddr(ip) => ip.to_string(),
+    };
+
+    let port = remote.addr.port.as_ref().map_or(5060, |p| *p.value());
+
+    let path = ws_path.unwrap_or("/");
+    let path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{}", path)
+    };
+
+    let url = format!("{}://{}:{}{}", scheme, host, port, path);
+    debug!(url = %url, "WebSocket connecting");
+
+    let mut request = url
+        .into_client_request()
+        .map_err(|e| Error::Error(format!("Invalid WebSocket URL: {}", e)))?;
+    request
+        .headers_mut()
+        .insert("sec-websocket-protocol", "sip".parse().unwrap());
+
+    let (ws_stream, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .map_err(|e| Error::Error(format!("WebSocket connect failed: {}", e)))?;
+    let (ws_sink, ws_read) = ws_stream.split();
+
+    Ok(WebSocketConnection {
+        inner: Arc::new(WebSocketInner {
+            remote_addr: remote.clone(),
+            ws_sink: Mutex::new(ws_sink),
+            ws_read: Mutex::new(Some(ws_read)),
+        }),
+        cancel_token,
+    })
 }
 
 pub fn get_first_non_loopback_interface() -> rsipstack::Result<IpAddr> {

@@ -200,15 +200,15 @@ async function handleRegister() {
                   <p v-if="errors.serverPort" class="text-xs text-destructive mt-1">{{ errors.serverPort }}</p>
                 </div>
                 <Select v-model="serverTransport">
-                  <SelectTrigger>
+                  <SelectTrigger class="w-full">
                     <SelectValue placeholder="协议" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="udp">UDP</SelectItem>
                     <SelectItem value="tcp">TCP</SelectItem>
                     <SelectItem value="tls">TLS</SelectItem>
-                    <SelectItem value="ws">WS</SelectItem>
-                    <SelectItem value="wss">WSS</SelectItem>
+                    <SelectItem value="ws" disabled>WS（暂不支持）</SelectItem>
+                    <SelectItem value="wss" disabled>WSS（暂不支持）</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -275,15 +275,15 @@ async function handleRegister() {
                 <div class="space-y-2">
                   <Label>协议</Label>
                   <Select v-model="proxyTransport">
-                    <SelectTrigger>
+                    <SelectTrigger class="w-full">
                       <SelectValue placeholder="协议" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="udp">UDP</SelectItem>
                       <SelectItem value="tcp">TCP</SelectItem>
                       <SelectItem value="tls">TLS</SelectItem>
-                      <SelectItem value="ws">WS</SelectItem>
-                      <SelectItem value="wss">WSS</SelectItem>
+                      <SelectItem value="ws" disabled>WS（暂不支持）</SelectItem>
+                      <SelectItem value="wss" disabled>WSS（暂不支持）</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

@@ -46,14 +46,30 @@ impl SipClient {
         enable_sip_flow: Option<bool>,
         sip_flow_log_dir: Option<String>,
     ) -> rsipstack::Result<(SipClientHandle, CancellationToken)> {
-        // Parse server URI
-        let server_uri_str = if server.starts_with("sip:") || server.starts_with("sips:") {
-            server
+        // Parse server URI - support both SIP URI (sip:host) and WebSocket URL (ws://host/path)
+        let (server_uri, ws_path) = if server.starts_with("ws://") || server.starts_with("wss://") {
+            let is_wss = server.starts_with("wss://");
+            let rest = &server[if is_wss { 6 } else { 5 }..]; // strip "wss://" or "ws://"
+            let (authority, path) = if let Some(slash) = rest.find('/') {
+                (&rest[..slash], rest[slash..].to_string())
+            } else {
+                (rest, "/".to_string())
+            };
+            let transport = if is_wss { "wss" } else { "ws" };
+            let sip_uri_str = format!("sip:{};transport={}", authority, transport);
+            let uri = Uri::try_from(sip_uri_str.clone())
+                .map_err(|e| rsipstack::Error::Error(format!("Invalid server URI '{}': {:?}", sip_uri_str, e)))?;
+            (uri, Some(path))
         } else {
-            format!("sip:{}", server)
+            let server_uri_str = if server.starts_with("sip:") || server.starts_with("sips:") {
+                server
+            } else {
+                format!("sip:{}", server)
+            };
+            let uri = Uri::try_from(server_uri_str)
+                .map_err(|e| rsipstack::Error::Error(format!("Invalid server URI: {:?}", e)))?;
+            (uri, None)
         };
-        let server_uri = Uri::try_from(server_uri_str)
-            .map_err(|e| rsipstack::Error::Error(format!("Invalid server URI: {:?}", e)))?;
 
         // Parse outbound proxy
         let outbound_proxy_uri = if let Some(proxy) = outbound_proxy {
@@ -92,7 +108,7 @@ impl SipClient {
                 protocol,
                 rsipstack::transport::SipAddr {
                     r#type: Some(protocol.into()),
-                    addr: server_uri.host_with_port.clone(),
+                    addr: proxy.host_with_port.clone(),
                 },
             )
         } else {
@@ -118,11 +134,90 @@ impl SipClient {
             info!(proxy = %proxy.host_with_port, "Outbound proxy configured");
         }
 
-        // Create transport connection
+        // Create transport connection and get local address
         let local_addr: SocketAddr = format!("{}:0", local_ip).parse()?;
-        let connection =
-            create_transport_connection(local_addr, target_sip_addr, cancel_token.clone()).await?;
-        transport_layer.add_transport(connection);
+
+        // Get local SipAddr for Contact/Via construction
+        let local_sip_addr = match protocol {
+            // For TCP: extract local addr from connection, use add_connection
+            helpers::Protocol::Tcp => {
+                let connection = create_transport_connection(local_addr, target_sip_addr.clone(), cancel_token.clone(), None).await?;
+
+                // Extract local address from TCP connection (inner is public for TCP)
+                let conn_local_addr = match &connection {
+                    rsipstack::transport::SipConnection::Tcp(tcp) => tcp.inner.local_addr.clone(),
+                    _ => {
+                        return Err(rsipstack::Error::Error(
+                            "Unexpected connection type for TCP protocol".to_string(),
+                        ));
+                    }
+                };
+
+                // Use add_connection for TCP (starts receive loop immediately)
+                transport_layer.add_connection(connection);
+                info!(local = %conn_local_addr, remote = %target_sip_addr, protocol = %protocol.as_str(), "TCP connection added via add_connection");
+
+                // Add a TcpListenerConnection to listens so get_addrs() returns the correct
+                // local TCP address for Via/Contact headers. The `external` field overrides
+                // get_addr() to return conn_local_addr (the outbound TCP connection's local addr).
+                // The listener binds to port 0 (OS-assigned port) to avoid port conflict.
+                let external_socket_addr = conn_local_addr.get_socketaddr()?;
+                let bind_socket_addr = std::net::SocketAddr::new(local_ip, 0);
+                let mut bind_sip_addr = rsipstack::transport::SipAddr::from(bind_socket_addr);
+                bind_sip_addr.r#type = Some(rsip::transport::Transport::Tcp);
+                let tcp_listener = rsipstack::transport::TcpListenerConnection::new(
+                    bind_sip_addr,
+                    Some(external_socket_addr),
+                ).await?;
+                transport_layer.add_transport(rsipstack::transport::SipConnection::TcpListener(tcp_listener));
+
+                conn_local_addr
+            }
+            // For TLS/WS/WSS: pre-create connection with custom TLS verifier (SkipCertVerifier),
+            // add_connection for receive loop + connection reuse (prevents rsipstack from
+            // auto-creating a new one with default TLS verifier that rejects self-signed certs).
+            // Create a TcpListenerConnection with the correct transport type in `external` so
+            // get_addrs() returns local_ip with the correct type (TLS/WS/WSS) for Via headers.
+            helpers::Protocol::Tls | helpers::Protocol::Ws | helpers::Protocol::Wss | helpers::Protocol::TlsSctp => {
+                let transport_type: rsip::transport::Transport = protocol.into();
+                let connection = create_transport_connection(local_addr, target_sip_addr.clone(), cancel_token.clone(), ws_path.clone()).await?;
+                // Register in connections map (rsipstack will reuse this for sends) + start receive loop
+                transport_layer.add_connection(connection);
+
+                // Create a TcpListenerConnection as a "local address anchor" in listens.
+                // Its `external` field overrides get_addr() to return local_ip with the
+                // correct transport type (TLS/WS/WSS) for proper Via header construction.
+                let bind_socket_addr = std::net::SocketAddr::new(local_ip, 0);
+                let mut bind_sip_addr = rsipstack::transport::SipAddr::from(bind_socket_addr);
+                bind_sip_addr.r#type = Some(rsip::transport::Transport::Tcp);
+                let local_sip_addr_for_via = rsipstack::transport::SipAddr {
+                    r#type: Some(transport_type),
+                    addr: rsip::HostWithPort {
+                        host: rsip::Host::IpAddr(local_ip),
+                        port: None,
+                    },
+                };
+                let addr_anchor = rsipstack::transport::tcp_listener::TcpListenerConnectionInner {
+                    local_addr: bind_sip_addr,
+                    external: Some(local_sip_addr_for_via.clone()),
+                };
+                let tcp_listener = rsipstack::transport::TcpListenerConnection {
+                    inner: std::sync::Arc::new(addr_anchor),
+                };
+                transport_layer.add_transport(rsipstack::transport::SipConnection::TcpListener(tcp_listener));
+                info!(local = %local_ip, protocol = %protocol.as_str(), "TLS/WS connection added, Via addr anchor set");
+
+                local_sip_addr_for_via
+            }
+            // For UDP: use add_transport (listener mode)
+            _ => {
+                let connection = create_transport_connection(local_addr, target_sip_addr.clone(), cancel_token.clone(), None).await?;
+                let udp_addr = connection.get_addr().clone();
+                transport_layer.add_transport(connection);
+                info!(local = %udp_addr, protocol = %protocol.as_str(), "UDP transport added");
+                udp_addr
+            }
+        };
 
         // Create SIP flow inspector
         let enable_flow = enable_sip_flow.unwrap_or(false); // 默认关闭
@@ -146,13 +241,8 @@ impl SipClient {
         let dialog_layer = Arc::new(DialogLayer::new(endpoint.inner.clone()));
         let (state_sender, state_receiver) = dialog_layer.new_dialog_state_channel();
 
-        let first_addr = endpoint
-            .get_addrs()
-            .first()
-            .ok_or(rsipstack::Error::Error("no address found".to_string()))?
-            .clone();
-
-        info!(address = %first_addr.addr, username = %username, "SIP client ready");
+        // Use local_sip_addr extracted from connection
+        info!(local_address = %local_sip_addr.addr, username = %username, "SIP client ready");
 
         let contact = rsip::Uri {
             scheme: Some(rsip::Scheme::Sip),
@@ -160,7 +250,7 @@ impl SipClient {
                 user: username.clone(),
                 password: None,
             }),
-            host_with_port: first_addr.addr.into(),
+            host_with_port: local_sip_addr.addr.into(),
             ..Default::default()
         };
 
