@@ -33,6 +33,8 @@ get_if_addrs = "0.5.3"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "local-time"] }
 cpal = "0.17.1"
 rustrtc = "0.3.21"
+rustls = { version = "0.23", features = ["ring"] }
+tokio-rustls = "0.26"
 bytes = "1"
 rubato = "1.0.1"
 audioadapter-buffers = "2.0"

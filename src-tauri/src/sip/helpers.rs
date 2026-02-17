@@ -167,16 +167,15 @@ pub async fn create_transport_connection(
             Ok(SipConnection::Udp(connection))
         }
         Some(rsip::transport::Transport::Tcp) => {
-            let resolved = resolve_sip_addr(&target).await?;
+            let resolve = resolve_sip_addr(&target).await?;
             let connection =
-                TcpConnection::connect(&resolved, Some(cancel_token.child_token())).await?;
+                TcpConnection::connect(&resolve, Some(cancel_token.child_token())).await?;
             Ok(SipConnection::Tcp(connection))
         }
         Some(rsip::transport::Transport::Tls) => {
-            let resolved = resolve_sip_addr(&target).await?;
             let verifier = Arc::new(SkipCertVerifier);
             let connection =
-                TlsConnection::connect(&resolved, Some(verifier), Some(cancel_token.child_token())).await?;
+                TlsConnection::connect(&target, Some(verifier), Some(cancel_token.child_token())).await?;
             Ok(SipConnection::Tls(connection))
         }
         Some(rsip::transport::Transport::Ws | rsip::transport::Transport::Wss) => {
