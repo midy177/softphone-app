@@ -299,7 +299,7 @@ async fn sip_register(
     .await
     {
         Ok((new_handle, cancel_token)) => {
-            *state.handle.lock().await = Some(new_handle);
+            *state.handle.lock().await = Some(std::sync::Arc::new(new_handle));
             *state.cancel_token.lock().await = Some(cancel_token);
             Ok(())
         }
@@ -328,10 +328,15 @@ async fn sip_make_call(state: State<'_, SipAppState>, callee: String) -> Result<
     let input_device = state.input_device.lock().await.clone();
     let output_device = state.output_device.lock().await.clone();
 
-    let handle_guard = state.handle.lock().await;
-    let handle = handle_guard
-        .as_ref()
-        .ok_or_else(|| "Not registered".to_string())?;
+    // Clone Arc<SipClientHandle> and release the lock immediately
+    // so that sip_hangup can also acquire the lock concurrently
+    let handle = {
+        let handle_guard = state.handle.lock().await;
+        handle_guard
+            .as_ref()
+            .ok_or_else(|| "Not registered".to_string())?
+            .clone()
+    };
 
     let cancel_token = state
         .cancel_token
@@ -341,7 +346,7 @@ async fn sip_make_call(state: State<'_, SipAppState>, callee: String) -> Result<
         .ok_or_else(|| "No cancel token available".to_string())?
         .clone();
 
-    sip::handle_make_call(handle, callee, input_device, output_device, cancel_token)
+    sip::handle_make_call(&handle, callee, input_device, output_device, cancel_token)
         .await
         .map_err(|e| {
             error!(error = ?e, "Make call failed");
@@ -351,12 +356,15 @@ async fn sip_make_call(state: State<'_, SipAppState>, callee: String) -> Result<
 
 #[tauri::command]
 async fn sip_hangup(state: State<'_, SipAppState>) -> Result<(), String> {
-    let handle_guard = state.handle.lock().await;
-    let handle = handle_guard
-        .as_ref()
-        .ok_or_else(|| "Not registered".to_string())?;
+    let handle = {
+        let handle_guard = state.handle.lock().await;
+        handle_guard
+            .as_ref()
+            .ok_or_else(|| "Not registered".to_string())?
+            .clone()
+    };
 
-    sip::handle_hangup(handle).await.map_err(|e| {
+    sip::handle_hangup(&handle).await.map_err(|e| {
         error!(error = ?e, "Hangup failed");
         format!("Hangup failed: {}", e)
     })
@@ -367,10 +375,13 @@ async fn sip_answer_call(state: State<'_, SipAppState>, call_id: String) -> Resu
     let input_device = state.input_device.lock().await.clone();
     let output_device = state.output_device.lock().await.clone();
 
-    let handle_guard = state.handle.lock().await;
-    let handle = handle_guard
-        .as_ref()
-        .ok_or_else(|| "Not registered".to_string())?;
+    let handle = {
+        let handle_guard = state.handle.lock().await;
+        handle_guard
+            .as_ref()
+            .ok_or_else(|| "Not registered".to_string())?
+            .clone()
+    };
 
     let cancel_token = state
         .cancel_token
@@ -380,7 +391,7 @@ async fn sip_answer_call(state: State<'_, SipAppState>, call_id: String) -> Resu
         .ok_or_else(|| "No cancel token available".to_string())?
         .clone();
 
-    sip::handle_answer_call(handle, call_id, input_device, output_device, cancel_token)
+    sip::handle_answer_call(&handle, call_id, input_device, output_device, cancel_token)
         .await
         .map_err(|e| {
             error!(error = ?e, "Answer call failed");
@@ -394,12 +405,15 @@ async fn sip_reject_call(
     call_id: String,
     reason: Option<u16>,
 ) -> Result<(), String> {
-    let handle_guard = state.handle.lock().await;
-    let handle = handle_guard
-        .as_ref()
-        .ok_or_else(|| "Not registered".to_string())?;
+    let handle = {
+        let handle_guard = state.handle.lock().await;
+        handle_guard
+            .as_ref()
+            .ok_or_else(|| "Not registered".to_string())?
+            .clone()
+    };
 
-    sip::handle_reject_call(handle, call_id, reason)
+    sip::handle_reject_call(&handle, call_id, reason)
         .await
         .map_err(|e| {
             error!(error = ?e, "Reject call failed");
@@ -423,32 +437,41 @@ async fn set_output_device(state: State<'_, SipAppState>, name: String) -> Resul
 
 #[tauri::command]
 async fn toggle_mic_mute(state: State<'_, SipAppState>) -> Result<bool, String> {
-    let handle_guard = state.handle.lock().await;
-    let handle = handle_guard
-        .as_ref()
-        .ok_or_else(|| "Not registered".to_string())?;
+    let handle = {
+        let handle_guard = state.handle.lock().await;
+        handle_guard
+            .as_ref()
+            .ok_or_else(|| "Not registered".to_string())?
+            .clone()
+    };
 
-    sip::handle_toggle_mic_mute(handle).await
+    sip::handle_toggle_mic_mute(&handle).await
 }
 
 #[tauri::command]
 async fn toggle_speaker_mute(state: State<'_, SipAppState>) -> Result<bool, String> {
-    let handle_guard = state.handle.lock().await;
-    let handle = handle_guard
-        .as_ref()
-        .ok_or_else(|| "Not registered".to_string())?;
+    let handle = {
+        let handle_guard = state.handle.lock().await;
+        handle_guard
+            .as_ref()
+            .ok_or_else(|| "Not registered".to_string())?
+            .clone()
+    };
 
-    sip::handle_toggle_speaker_mute(handle).await
+    sip::handle_toggle_speaker_mute(&handle).await
 }
 
 #[tauri::command]
 async fn send_dtmf(state: State<'_, SipAppState>, digit: String) -> Result<(), String> {
-    let handle_guard = state.handle.lock().await;
-    let handle = handle_guard
-        .as_ref()
-        .ok_or_else(|| "Not registered".to_string())?;
+    let handle = {
+        let handle_guard = state.handle.lock().await;
+        handle_guard
+            .as_ref()
+            .ok_or_else(|| "Not registered".to_string())?
+            .clone()
+    };
 
-    sip::handle_send_dtmf(handle, digit).await
+    sip::handle_send_dtmf(&handle, digit).await
 }
 
 // ── SIP Flow 配置命令（统一接口，支持注册前后使用）──
@@ -467,9 +490,7 @@ async fn set_sip_flow_enabled(state: State<'_, SipAppState>, enabled: bool) -> R
         } else {
             sip::handle_disable_sip_flow(handle)?;
         }
-    }
-
-    Ok(())
+    }    Ok(())
 }
 
 /// 设置 SIP 消息日志目录

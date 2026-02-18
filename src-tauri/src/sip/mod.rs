@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::webrtc::WebRtcSession;
@@ -379,17 +379,59 @@ pub async fn handle_make_call(
         ..Default::default()
     };
 
+    // Create child token from global cancel token BEFORE making the call
+    let call_cancel_token = global_cancel_token.child_token();
+
+    // Generate dialog ID placeholder (will be updated after dialog is created)
+    let dialog_id_placeholder = format!("{}_pending", call_id);
+    handle
+        .active_call_tokens
+        .insert(dialog_id_placeholder.clone(), call_cancel_token.clone());
+    debug!(call_id = %call_id, "Registered pending call cancellation token");
+
     // 外呼不需要 STUN 映射：PBX 会根据我们发送的 RTP 源地址做 latching
-    let (dialog, webrtc_session) = make_call::make_call(
+    let call_result = make_call::make_call(
         handle.dialog_layer.clone(),
         invite_option,
         handle.state_sender.clone(),
         input_device,
         output_device,
+        call_cancel_token.clone(),
     )
-    .await?;
+    .await;
 
-    // Create child token from global cancel token
+    let (dialog, mut webrtc_session) = match call_result {
+        Ok(result) => result,
+        Err(e) => {
+            // Clean up on failure - remove placeholder token and cancel
+            handle.active_call_tokens.remove(&dialog_id_placeholder);
+            call_cancel_token.cancel();
+            return Err(e);
+        }
+    };
+
+    // CRITICAL: Check again if cancellation was requested while make_call was executing
+    // This handles the race condition where hangup is called just as do_invite completes
+    if call_cancel_token.is_cancelled() {
+        warn!(call_id = %call_id, "Call was cancelled while setting up, terminating immediately");
+        // Remove placeholder token
+        handle.active_call_tokens.remove(&dialog_id_placeholder);
+        webrtc_session.close().await;
+        // Send BYE to terminate the just-established call
+        match &dialog {
+            rsipstack::dialog::dialog::Dialog::ClientInvite(d) => {
+                if let Err(e) = d.bye().await {
+                    warn!(call_id = %call_id, error = ?e, "Failed to send BYE after late cancellation");
+                }
+            }
+            _ => {}
+        }
+        return Err(rsipstack::Error::Error("Call cancelled".to_string()));
+    }
+
+    // Call was successful and not cancelled - remove placeholder and create new token for active call
+    handle.active_call_tokens.remove(&dialog_id_placeholder);
+
     let call_cancel_token = global_cancel_token.child_token();
 
     // Register token (use dialog ID as key for consistency with process_dialog)
@@ -469,7 +511,17 @@ pub async fn handle_hangup(handle: &SipClientHandle) -> rsipstack::Result<()> {
         }
         info!(call_id = %call.call_id, "Call hung up");
     } else {
-        debug!("No active call to hang up");
+        // No active call, but cancel any pending call tokens (e.g. during calling/ringing state)
+        let token_count = handle.active_call_tokens.len();
+        info!("No active call found, canceling {} pending call token(s)", token_count);
+        for entry in handle.active_call_tokens.iter() {
+            let token = entry.value();
+            info!(dialog_id = %entry.key(), "Canceling pending call token");
+            token.cancel();
+            info!(dialog_id = %entry.key(), "Pending call token canceled");
+        }
+        handle.active_call_tokens.clear();
+        info!("All pending call tokens cleared");
     }
     Ok(())
 }

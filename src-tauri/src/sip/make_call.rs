@@ -4,6 +4,7 @@ use rsipstack::dialog::dialog::DialogStateSender;
 use rsipstack::dialog::dialog_layer::DialogLayer;
 use rsipstack::dialog::invitation::InviteOption;
 use rsipstack::Error;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -19,6 +20,7 @@ pub async fn make_call(
     state_sender: DialogStateSender,
     input_device: Option<String>,
     output_device: Option<String>,
+    cancel_token: CancellationToken,
 ) -> rsipstack::Result<(rsipstack::dialog::dialog::Dialog, WebRtcSession)> {
     let caller = invite_option.caller.to_string();
     let callee = invite_option.callee.to_string();
@@ -36,6 +38,7 @@ pub async fn make_call(
         &call_id,
         &callee,
         true, // prefer_srtp = true
+        cancel_token.clone(),
     )
     .await;
 
@@ -59,6 +62,7 @@ pub async fn make_call(
                 &new_call_id,
                 &callee,
                 false, // prefer_srtp = false
+                cancel_token,
             )
             .await;
         }
@@ -77,6 +81,7 @@ async fn try_call_with_mode(
     call_id: &str,
     callee: &str,
     prefer_srtp: bool,
+    cancel_token: CancellationToken,
 ) -> rsipstack::Result<(rsipstack::dialog::dialog::Dialog, WebRtcSession)> {
     // Create WebRTC session and generate SDP offer with ICE candidates
     let (mut session, sdp_offer) = WebRtcSession::new_outbound(
@@ -97,11 +102,22 @@ async fn try_call_with_mode(
     // Set the SDP offer
     invite_option.offer = Some(sdp_offer.into_bytes());
 
-    // Send INVITE and wait for response
+    // Send INVITE and wait for response (or cancellation)
     info!(call_id = %call_id, srtp = prefer_srtp, "Sending INVITE");
-    let (dialog, resp) = dialog_layer
-        .do_invite(invite_option.clone(), state_sender)
-        .await?;
+
+    let invite_result = tokio::select! {
+        result = dialog_layer.do_invite(invite_option.clone(), state_sender) => {
+            info!(call_id = %call_id, "do_invite returned");
+            result
+        },
+        _ = cancel_token.cancelled() => {
+            info!(call_id = %call_id, "Call cancelled by user (during INVITE)");
+            session.close().await;
+            return Err(Error::Error("Call cancelled".to_string()));
+        }
+    };
+
+    let (dialog, resp) = invite_result?;
     let resp = resp.ok_or(Error::Error("No response from remote".to_string()))?;
 
     if resp.status_code != rsip::StatusCode::OK {
@@ -113,6 +129,17 @@ async fn try_call_with_mode(
         );
         session.close().await;
         return Err(Error::Error(format!("Call rejected: {}", resp.status_code)));
+    }
+
+    // Check if cancellation was requested during call setup (race condition handling)
+    if cancel_token.is_cancelled() {
+        warn!(call_id = %call_id, "Call was cancelled during setup, sending BYE immediately");
+        session.close().await;
+        // Send BYE to terminate the call that just got established
+        if let Err(e) = dialog.bye().await {
+            warn!(call_id = %call_id, error = ?e, "Failed to send BYE after cancellation");
+        }
+        return Err(Error::Error("Call cancelled".to_string()));
     }
 
     info!(call_id = %call_id, callee = %callee, "Call answered (200 OK)");

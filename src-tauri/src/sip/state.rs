@@ -40,7 +40,7 @@ impl Default for SipFlowConfig {
 }
 
 pub struct SipAppState {
-    pub handle: tokio::sync::Mutex<Option<SipClientHandle>>,
+    pub handle: tokio::sync::Mutex<Option<Arc<SipClientHandle>>>,
     pub cancel_token: tokio::sync::Mutex<Option<CancellationToken>>,
     pub input_device: tokio::sync::Mutex<Option<String>>,
     pub output_device: tokio::sync::Mutex<Option<String>>,
