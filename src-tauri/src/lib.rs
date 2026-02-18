@@ -327,6 +327,7 @@ async fn sip_unregister(state: State<'_, SipAppState>) -> Result<(), String> {
 async fn sip_make_call(state: State<'_, SipAppState>, callee: String) -> Result<(), String> {
     let input_device = state.input_device.lock().await.clone();
     let output_device = state.output_device.lock().await.clone();
+    let prefer_srtp = *state.prefer_srtp.lock().await;
 
     // Clone Arc<SipClientHandle> and release the lock immediately
     // so that sip_hangup can also acquire the lock concurrently
@@ -346,7 +347,7 @@ async fn sip_make_call(state: State<'_, SipAppState>, callee: String) -> Result<
         .ok_or_else(|| "No cancel token available".to_string())?
         .clone();
 
-    sip::handle_make_call(&handle, callee, input_device, output_device, cancel_token)
+    sip::handle_make_call(&handle, callee, input_device, output_device, cancel_token, prefer_srtp)
         .await
         .map_err(|e| {
             error!(error = ?e, "Make call failed");
@@ -525,6 +526,19 @@ async fn get_sip_flow_config(
     }
 }
 
+/// 获取 SRTP 优先配置
+#[tauri::command]
+async fn get_prefer_srtp(state: State<'_, SipAppState>) -> Result<bool, String> {
+    Ok(*state.prefer_srtp.lock().await)
+}
+
+/// 设置 SRTP 优先配置
+#[tauri::command]
+async fn set_prefer_srtp(state: State<'_, SipAppState>, enabled: bool) -> Result<(), String> {
+    *state.prefer_srtp.lock().await = enabled;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Install ring as the default rustls CryptoProvider before any TLS operations.
@@ -542,6 +556,7 @@ pub fn run() {
             input_device: tokio::sync::Mutex::new(None),
             output_device: tokio::sync::Mutex::new(None),
             sip_flow_config: tokio::sync::Mutex::new(sip::state::SipFlowConfig::default()),
+            prefer_srtp: tokio::sync::Mutex::new(true), // 默认优先 SRTP
         })
         .invoke_handler(tauri::generate_handler![
             enumerate_audio_devices,
@@ -560,6 +575,8 @@ pub fn run() {
             set_sip_flow_enabled,
             set_sip_flow_dir,
             get_sip_flow_config,
+            get_prefer_srtp,
+            set_prefer_srtp,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

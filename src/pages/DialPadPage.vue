@@ -140,17 +140,17 @@ const callStateLabel: Record<string, string> = {
 
       <CardContent :class="callState === 'connected' ? 'space-y-2 pt-4' : 'space-y-3'">
         <!-- Phone number input -->
-        <div v-if="callState === 'idle'" class="flex gap-2">
+        <div v-if="callState === 'idle'" class="relative">
           <Input
             v-model="phoneNumber"
             placeholder="输入号码"
-            class="text-center text-xl font-mono tracking-wider"
+            class="text-center text-xl font-mono tracking-wider pr-10"
           />
           <Button
             v-if="phoneNumber"
             variant="ghost"
             size="sm"
-            class="shrink-0"
+            class="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
             @click="phoneNumber = phoneNumber.slice(0, -1)"
           >
             ⌫
@@ -158,18 +158,18 @@ const callStateLabel: Record<string, string> = {
         </div>
 
         <!-- DTMF input display (during call) -->
-        <div v-if="callState === 'connected'" class="flex gap-2">
+        <div v-if="callState === 'connected'" class="relative">
           <Input
             v-model="dtmfInput"
             placeholder="DTMF"
-            class="text-center text-xl font-mono tracking-wider"
+            class="text-center text-xl font-mono tracking-wider pr-10"
             readonly
           />
           <Button
             v-if="dtmfInput"
             variant="ghost"
             size="sm"
-            class="shrink-0"
+            class="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
             @click="dtmfInput = dtmfInput.slice(0, -1)"
           >
             ⌫
@@ -186,12 +186,20 @@ const callStateLabel: Record<string, string> = {
         <!-- Call state indicator -->
         <div
           v-if="callState !== 'idle' && callState !== 'connected'"
-          class="text-center py-4"
+          class="flex flex-col items-center justify-center gap-6 h-[calc(100vh-80px)]"
         >
           <p class="text-lg font-medium">
             {{ callStateLabel[callState] || callState }}
           </p>
           <p class="text-sm text-muted-foreground">{{ callee || phoneNumber }}</p>
+          <Button
+            variant="destructive"
+            size="lg"
+            class="rounded-full h-14 w-14"
+            @click="handleHangup"
+          >
+            <Phone class="h-6 w-6 rotate-135" />
+          </Button>
         </div>
 
         <!-- Call controls -->
@@ -228,15 +236,6 @@ const callStateLabel: Record<string, string> = {
             @click="handleDial"
           >
             <Phone class="h-6 w-6" />
-          </Button>
-          <Button
-            v-else-if="callState === 'calling' || callState === 'ringing'"
-            variant="destructive"
-            size="lg"
-            class="rounded-full h-14 w-14"
-            @click="handleHangup"
-          >
-            <Phone class="h-6 w-6 rotate-135" />
           </Button>
         </div>
       </CardContent>

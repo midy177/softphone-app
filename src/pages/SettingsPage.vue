@@ -5,7 +5,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useSipRegistration } from '@/composables/useSipRegistration'
 import { useAudio } from '@/composables/useAudio'
-import { getSavedSipFlowConfig, saveSipFlowConfig } from '@/utils/configManager'
+import { getSavedSipFlowConfig, saveSipFlowConfig, getAppConfig, saveAppConfig } from '@/utils/configManager'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -32,6 +32,10 @@ const sipFlowEnabled = ref(false)
 const sipFlowLoading = ref(false)
 const sipFlowDir = ref('')
 
+// SRTP 优先配置
+const preferSrtp = ref(true)
+const srtpLoading = ref(false)
+
 async function toggleSipFlow() {
   console.log('[SettingsPage] toggleSipFlow called, current state:', sipFlowEnabled.value)
   if (sipFlowLoading.value) {
@@ -52,16 +56,16 @@ async function toggleSipFlow() {
     console.log('[SettingsPage] Updated local state to:', sipFlowEnabled.value)
 
     // 保存到 localStorage
-    const configToSave = { enabled: newEnabled, log_dir: sipFlowDir.value }
-    console.log('[SettingsPage] Saving config to localStorage:', configToSave)
-    saveSipFlowConfig(configToSave)
+    const config = getAppConfig() || {
+      sip_flow: { enabled: newEnabled, log_dir: sipFlowDir.value },
+      prefer_srtp: preferSrtp.value,
+    }
+    config.sip_flow.enabled = newEnabled
+    saveAppConfig(config)
+    console.log('[SettingsPage] Config saved to localStorage')
 
     const message = newEnabled ? 'SIP 消息日志已开启' : 'SIP 消息日志已关闭'
     console.log('[SettingsPage]', message)
-
-    // Verify it was saved
-    const verified = getSavedSipFlowConfig()
-    console.log('[SettingsPage] Verified saved config:', verified)
   } catch (e) {
     console.error('[SettingsPage] Error setting SIP flow enabled:', e)
   } finally {
@@ -79,23 +83,59 @@ onMounted(async () => {
 })
 
 async function loadConfig() {
-  // 从 localStorage 读取配置（已在 App.vue 中应用到后端）
-  const saved = getSavedSipFlowConfig()
-  if (saved) {
-    sipFlowEnabled.value = saved.enabled
-    sipFlowDir.value = saved.log_dir
-    console.log('[SettingsPage] Loaded config from localStorage:', saved)
+  // 尝试从新的统一配置加载
+  const appConfig = getAppConfig()
+
+  if (appConfig) {
+    sipFlowEnabled.value = appConfig.sip_flow.enabled
+    sipFlowDir.value = appConfig.sip_flow.log_dir
+    preferSrtp.value = appConfig.prefer_srtp
+    console.log('[SettingsPage] Loaded config from localStorage:', appConfig)
   } else {
     // 如果没有保存的配置，从后端获取默认值
     try {
-      const config = await invoke<SipFlowConfig>('get_sip_flow_config')
-      sipFlowEnabled.value = config.enabled
-      sipFlowDir.value = config.log_dir
-      saveSipFlowConfig(config)
-      console.log('[SettingsPage] Loaded default config from backend:', config)
+      const sipFlowConfig = await invoke<SipFlowConfig>('get_sip_flow_config')
+      sipFlowEnabled.value = sipFlowConfig.enabled
+      sipFlowDir.value = sipFlowConfig.log_dir
+
+      const srtpConfig = await invoke<boolean>('get_prefer_srtp')
+      preferSrtp.value = srtpConfig
+
+      // 保存默认配置
+      saveAppConfig({
+        sip_flow: sipFlowConfig,
+        prefer_srtp: srtpConfig,
+      })
+      console.log('[SettingsPage] Loaded default config from backend')
     } catch (e) {
       console.error('[SettingsPage] Failed to load config:', e)
     }
+  }
+}
+
+async function toggleSrtp() {
+  if (srtpLoading.value) return
+
+  srtpLoading.value = true
+  const newEnabled = !preferSrtp.value
+
+  try {
+    await invoke('set_prefer_srtp', { enabled: newEnabled })
+    preferSrtp.value = newEnabled
+
+    // 保存到 localStorage
+    const config = getAppConfig() || {
+      sip_flow: { enabled: sipFlowEnabled.value, log_dir: sipFlowDir.value },
+      prefer_srtp: newEnabled,
+    }
+    config.prefer_srtp = newEnabled
+    saveAppConfig(config)
+
+    console.log('[SettingsPage] SRTP preference updated and saved:', newEnabled)
+  } catch (e) {
+    console.error('[SettingsPage] Error setting SRTP preference:', e)
+  } finally {
+    srtpLoading.value = false
   }
 }
 
@@ -116,9 +156,13 @@ async function selectLogFolder() {
       sipFlowDir.value = selected
 
       // 保存到 localStorage
-      const configToSave = { enabled: sipFlowEnabled.value, log_dir: selected }
-      console.log('[SettingsPage] Saving config with new dir:', configToSave)
-      saveSipFlowConfig(configToSave)
+      const config = getAppConfig() || {
+        sip_flow: { enabled: sipFlowEnabled.value, log_dir: selected },
+        prefer_srtp: preferSrtp.value,
+      }
+      config.sip_flow.log_dir = selected
+      saveAppConfig(config)
+      console.log('[SettingsPage] Config saved with new dir')
 
       console.log('[SettingsPage] 日志目录已更新')
     } else {
@@ -223,6 +267,32 @@ function handleBack() {
           </div>
           <div v-if="!audio.microphones.value.length" class="text-sm text-muted-foreground">
             未检测到音频设备
+          </div>
+        </CardContent>
+      </Card>
+
+      <!-- 通话设置 -->
+      <Card>
+        <CardHeader>
+          <CardTitle>通话设置</CardTitle>
+          <CardDescription>控制通话加密和媒体传输</CardDescription>
+        </CardHeader>
+        <CardContent class="space-y-4">
+          <div class="flex items-center justify-between">
+            <div class="space-y-0.5">
+              <Label>优先使用 SRTP</Label>
+              <p class="text-sm text-muted-foreground">
+                启用后优先尝试加密的媒体传输，若服务器不支持则自动降级为 RTP
+              </p>
+            </div>
+            <Button
+              :variant="preferSrtp ? 'default' : 'outline'"
+              size="sm"
+              @click="toggleSrtp"
+              :disabled="srtpLoading"
+            >
+              {{ preferSrtp ? '已开启' : '已关闭' }}
+            </Button>
           </div>
         </CardContent>
       </Card>

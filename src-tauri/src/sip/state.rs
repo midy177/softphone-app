@@ -45,6 +45,7 @@ pub struct SipAppState {
     pub input_device: tokio::sync::Mutex<Option<String>>,
     pub output_device: tokio::sync::Mutex<Option<String>>,
     pub sip_flow_config: tokio::sync::Mutex<SipFlowConfig>,
+    pub prefer_srtp: tokio::sync::Mutex<bool>,
 }
 
 pub struct SipClientHandle {

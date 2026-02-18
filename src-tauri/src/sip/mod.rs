@@ -353,6 +353,7 @@ pub async fn handle_make_call(
     input_device: Option<String>,
     output_device: Option<String>,
     global_cancel_token: CancellationToken,
+    prefer_srtp: bool,
 ) -> rsipstack::Result<()> {
     let call_id = Uuid::new_v4().to_string();
 
@@ -382,8 +383,9 @@ pub async fn handle_make_call(
     // Create child token from global cancel token BEFORE making the call
     let call_cancel_token = global_cancel_token.child_token();
 
-    // Generate dialog ID placeholder (will be updated after dialog is created)
-    let dialog_id_placeholder = format!("{}_pending", call_id);
+    // Use a fixed placeholder key for pending outbound calls (not call_id based)
+    // This ensures cancellation works even when make_call retries with a new call_id
+    let dialog_id_placeholder = "pending_outbound".to_string();
     handle
         .active_call_tokens
         .insert(dialog_id_placeholder.clone(), call_cancel_token.clone());
@@ -397,6 +399,7 @@ pub async fn handle_make_call(
         input_device,
         output_device,
         call_cancel_token.clone(),
+        prefer_srtp,
     )
     .await;
 

@@ -13,7 +13,8 @@ use crate::webrtc::WebRtcSession;
 /// Make an outbound call with internally-generated SDP (from rustrtc).
 /// Returns (Dialog, WebRtcSession) on success.
 ///
-/// 优先尝试 SRTP，若对端返回 488 Not Acceptable 则自动降级为 RTP（使用新的 call_id）。
+/// 根据 prefer_srtp 参数决定是否尝试 SRTP。
+/// 若 prefer_srtp=true 且对端返回 488 Not Acceptable，则自动降级为 RTP（使用新的 call_id）。
 pub async fn make_call(
     dialog_layer: Arc<DialogLayer>,
     mut invite_option: InviteOption,
@@ -21,14 +22,15 @@ pub async fn make_call(
     input_device: Option<String>,
     output_device: Option<String>,
     cancel_token: CancellationToken,
+    prefer_srtp: bool,
 ) -> rsipstack::Result<(rsipstack::dialog::dialog::Dialog, WebRtcSession)> {
     let caller = invite_option.caller.to_string();
     let callee = invite_option.callee.to_string();
     let call_id = invite_option.call_id.clone().unwrap_or_default();
 
-    debug!(call_id = %call_id, caller = %caller, callee = %callee, "Preparing outbound call");
+    debug!(call_id = %call_id, caller = %caller, callee = %callee, prefer_srtp = prefer_srtp, "Preparing outbound call");
 
-    // 优先尝试 SRTP
+    // 根据配置决定是否尝试 SRTP
     let result = try_call_with_mode(
         &dialog_layer,
         &mut invite_option,
@@ -37,34 +39,42 @@ pub async fn make_call(
         &output_device,
         &call_id,
         &callee,
-        true, // prefer_srtp = true
+        prefer_srtp,
         cancel_token.clone(),
     )
     .await;
 
-    // 若对端返回 488 Not Acceptable，降级为 RTP 重试
-    if let Err(Error::Error(ref msg)) = result {
-        if msg.contains("488") || msg.contains("NotAcceptableHere") {
-            warn!(call_id = %call_id, "Remote rejected SRTP (488), retrying with RTP");
+    // 若启用了 SRTP 且对端返回 488 Not Acceptable，降级为 RTP 重试
+    if prefer_srtp {
+        if let Err(Error::Error(ref msg)) = result {
+            if msg.contains("488") || msg.contains("NotAcceptableHere") {
+                warn!(call_id = %call_id, "Remote rejected SRTP (488), retrying with RTP");
 
-            // 生成新的 call_id 用于重试
-            let new_call_id = Uuid::new_v4().to_string();
-            invite_option.call_id = Some(new_call_id.clone());
+                // Check if cancellation was requested before retrying
+                if cancel_token.is_cancelled() {
+                    info!(call_id = %call_id, "Call cancelled before RTP retry");
+                    return Err(Error::Error("Call cancelled".to_string()));
+                }
 
-            info!(old_call_id = %call_id, new_call_id = %new_call_id, "Retrying with new call_id");
+                // 生成新的 call_id 用于重试
+                let new_call_id = Uuid::new_v4().to_string();
+                invite_option.call_id = Some(new_call_id.clone());
 
-            return try_call_with_mode(
-                &dialog_layer,
-                &mut invite_option,
-                state_sender,
-                &input_device,
-                &output_device,
-                &new_call_id,
-                &callee,
-                false, // prefer_srtp = false
-                cancel_token,
-            )
-            .await;
+                info!(old_call_id = %call_id, new_call_id = %new_call_id, "Retrying with new call_id");
+
+                return try_call_with_mode(
+                    &dialog_layer,
+                    &mut invite_option,
+                    state_sender,
+                    &input_device,
+                    &output_device,
+                    &new_call_id,
+                    &callee,
+                    false, // prefer_srtp = false
+                    cancel_token,
+                )
+                .await;
+            }
         }
     }
 
