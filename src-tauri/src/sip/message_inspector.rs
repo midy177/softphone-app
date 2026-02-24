@@ -8,7 +8,7 @@ use std::{
 };
 use tracing::{error, info};
 
-/// SIP 消息流检查器，支持动态开关日志记录
+/// SIP message flow inspector with dynamic enable/disable of logging
 #[derive(Clone)]
 pub struct SipFlow {
     log_file: Arc<Mutex<Option<std::fs::File>>>,
@@ -17,13 +17,13 @@ pub struct SipFlow {
 }
 
 impl SipFlow {
-    /// 创建新的 SIP 消息检查器
+    /// Create a new SIP message inspector
     ///
-    /// # 参数
-    /// - `log_dir`: 日志目录，如果为 None 则使用系统临时目录
-    /// - `enabled`: 是否启用日志记录
+    /// # Parameters
+    /// - `log_dir`: log directory; uses the system temp dir if None
+    /// - `enabled`: whether to enable logging on creation
     pub fn new(log_dir: Option<&str>, enabled: bool) -> Self {
-        // 确定日志目录
+        // Resolve log directory
         let dir = log_dir.map(PathBuf::from).unwrap_or_else(|| {
             let mut temp = std::env::temp_dir();
             temp.push("softphone-sip-logs");
@@ -43,7 +43,7 @@ impl SipFlow {
         }
     }
 
-    /// 打开日志文件
+    /// Open (or create) the log file in the given directory
     fn open_log_file(dir: &PathBuf) -> Option<std::fs::File> {
         if let Err(e) = fs::create_dir_all(dir) {
             error!("Failed to create SIP flow log directory: {}", e);
@@ -67,11 +67,11 @@ impl SipFlow {
         }
     }
 
-    /// 启用日志记录
+    /// Enable SIP message logging
     pub fn enable(&self) {
         let mut enabled = self.enabled.lock().unwrap();
         if *enabled {
-            return; // 已经启用
+            return; // already enabled
         }
 
         *enabled = true;
@@ -81,11 +81,11 @@ impl SipFlow {
         info!("SIP flow logging enabled");
     }
 
-    /// 禁用日志记录
+    /// Disable SIP message logging
     pub fn disable(&self) {
         let mut enabled = self.enabled.lock().unwrap();
         if !*enabled {
-            return; // 已经禁用
+            return; // already disabled
         }
 
         *enabled = false;
@@ -94,17 +94,17 @@ impl SipFlow {
         info!("SIP flow logging disabled");
     }
 
-    /// 检查是否启用
+    /// Check whether logging is currently enabled
     pub fn is_enabled(&self) -> bool {
         *self.enabled.lock().unwrap()
     }
 
-    /// 设置日志目录（如果日志已启用，会重新打开文件）
+    /// Update the log directory (reopens the log file if logging is currently enabled)
     pub fn set_log_dir(&self, dir: PathBuf) -> Result<(), String> {
         let mut log_dir = self.log_dir.lock().unwrap();
         *log_dir = dir.clone();
 
-        // 如果当前已启用，重新打开日志文件
+        // Reopen log file in the new directory if currently enabled
         let enabled = *self.enabled.lock().unwrap();
         if enabled {
             let mut log_file = self.log_file.lock().unwrap();
@@ -121,14 +121,14 @@ impl SipFlow {
         Ok(())
     }
 
-    /// 获取当前日志目录
+    /// Get the current log directory
     pub fn get_log_dir(&self) -> PathBuf {
         self.log_dir.lock().unwrap().clone()
     }
 
-    /// 记录 SIP 消息
+    /// Record a SIP message to the log file
     fn record(&self, direction: &str, msg: &SipMessage) {
-        // 检查是否启用
+        // Skip if logging is disabled
         if !self.is_enabled() {
             return;
         }
@@ -143,7 +143,7 @@ impl SipFlow {
             let timestamp = chrono::Utc::now();
             let content = msg.to_string();
 
-            // 写入日志文件
+            // Write to log file
             if let Ok(mut log_file_guard) = self.log_file.lock() {
                 if let Some(ref mut file) = *log_file_guard {
                     let separator = "=".repeat(80);

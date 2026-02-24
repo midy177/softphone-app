@@ -131,7 +131,7 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
     use cpal::traits::{DeviceTrait, HostTrait};
     use tracing::warn;
 
-    // 枚举音频设备（不打印日志）
+    // Enumerate audio devices (no logging)
 
     // On Linux, get friendly names from PulseAudio/PipeWire
     #[cfg(target_os = "linux")]
@@ -219,7 +219,7 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
         }
     }
 
-    // 只在有错误时打印日志
+    // Only log on error
     // info!(
     //     skipped = skipped_count,
     //     inputs = inputs.len(),
@@ -284,7 +284,7 @@ async fn sip_register(
         return Err("Already registered".to_string());
     }
 
-    // 获取 SIP flow 配置
+    // Get SIP flow config
     let sip_flow_config = state.sip_flow_config.lock().await.clone();
 
     match sip::SipClient::connect(
@@ -526,15 +526,15 @@ async fn send_dtmf(state: State<'_, SipAppState>, digit: String) -> Result<(), S
     sip::handle_send_dtmf(&handle, digit).await
 }
 
-// ── SIP Flow 配置命令（统一接口，支持注册前后使用）──
+// ── SIP Flow config commands (unified interface, works before and after registration) ──
 
-/// 设置 SIP 消息日志开关
+/// Enable or disable SIP message flow logging
 #[tauri::command]
 async fn set_sip_flow_enabled(state: State<'_, SipAppState>, enabled: bool) -> Result<(), String> {
-    // 更新配置
+    // Update stored config
     state.sip_flow_config.lock().await.enabled = enabled;
 
-    // 如果已注册，同时更新运行中的实例
+    // If already registered, also update the running instance
     let handle_guard = state.handle.lock().await;
     if let Some(handle) = handle_guard.as_ref() {
         if enabled {
@@ -545,13 +545,13 @@ async fn set_sip_flow_enabled(state: State<'_, SipAppState>, enabled: bool) -> R
     }    Ok(())
 }
 
-/// 设置 SIP 消息日志目录
+/// Set the SIP message log directory
 #[tauri::command]
 async fn set_sip_flow_dir(state: State<'_, SipAppState>, dir: String) -> Result<(), String> {
-    // 更新配置
+    // Update stored config
     state.sip_flow_config.lock().await.log_dir = dir.clone();
 
-    // 如果已注册，同时更新运行中的实例
+    // If already registered, also update the running instance
     let handle_guard = state.handle.lock().await;
     if let Some(handle) = handle_guard.as_ref() {
         sip::handle_set_sip_flow_dir(handle, dir)?;
@@ -560,30 +560,30 @@ async fn set_sip_flow_dir(state: State<'_, SipAppState>, dir: String) -> Result<
     Ok(())
 }
 
-/// 获取 SIP 消息日志配置
+/// Get the current SIP message flow log configuration
 #[tauri::command]
 async fn get_sip_flow_config(
     state: State<'_, SipAppState>,
 ) -> Result<sip::state::SipFlowConfig, String> {
-    // 优先从已注册的 handle 获取实际运行状态
+    // Prefer live state from the registered handle when available
     let handle_guard = state.handle.lock().await;
     if let Some(handle) = handle_guard.as_ref() {
         let enabled = sip::handle_is_sip_flow_enabled(handle)?;
         let log_dir = sip::handle_get_sip_flow_dir(handle)?;
         Ok(sip::state::SipFlowConfig { enabled, log_dir })
     } else {
-        // 否则返回配置
+        // Otherwise return the stored config
         Ok(state.sip_flow_config.lock().await.clone())
     }
 }
 
-/// 获取 SRTP 优先配置
+/// Get the SRTP preference setting
 #[tauri::command]
 async fn get_prefer_srtp(state: State<'_, SipAppState>) -> Result<bool, String> {
     Ok(*state.prefer_srtp.lock().await)
 }
 
-/// 设置 SRTP 优先配置
+/// Set the SRTP preference setting
 #[tauri::command]
 async fn set_prefer_srtp(state: State<'_, SipAppState>, enabled: bool) -> Result<(), String> {
     *state.prefer_srtp.lock().await = enabled;
@@ -607,9 +607,9 @@ pub fn run() {
             input_device: tokio::sync::Mutex::new(None),
             output_device: tokio::sync::Mutex::new(None),
             sip_flow_config: tokio::sync::Mutex::new(sip::state::SipFlowConfig::default()),
-            prefer_srtp: tokio::sync::Mutex::new(true), // 默认优先 SRTP
-            noise_reduce: tokio::sync::Mutex::new(false), // 默认关闭降噪
-            speaker_noise_reduce: tokio::sync::Mutex::new(false), // 默认关闭扬声器降噪
+            prefer_srtp: tokio::sync::Mutex::new(true), // default: prefer SRTP
+            noise_reduce: tokio::sync::Mutex::new(false), // default: noise reduction disabled
+            speaker_noise_reduce: tokio::sync::Mutex::new(false), // default: speaker noise reduction disabled
         })
         .invoke_handler(tauri::generate_handler![
             enumerate_audio_devices,

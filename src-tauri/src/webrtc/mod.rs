@@ -12,15 +12,15 @@ use tracing::{debug, info, warn};
 use audio_bridge::AudioBridge;
 use codec::NegotiatedCodec;
 
-/// 检测 SDP 是否包含 SRTP 相关属性（使用 rustrtc 的标准 SDP 解析 API）
+/// Detect whether an SDP string contains SRTP-related attributes (using the rustrtc standard SDP parsing API).
 ///
-/// 检查项：
-/// 1. SDES crypto 属性 (a=crypto:1 AES_CM_128_HMAC_SHA1_80 ...)
-/// 2. DTLS fingerprint 属性 (a=fingerprint:sha-256 ...)
-/// 3. Media protocol 字段包含 SAVP (RTP/SAVP 或 UDP/TLS/RTP/SAVPF)
+/// Checks for:
+/// 1. SDES crypto attribute (a=crypto:1 AES_CM_128_HMAC_SHA1_80 ...)
+/// 2. DTLS fingerprint attribute (a=fingerprint:sha-256 ...)
+/// 3. Media protocol field containing SAVP (RTP/SAVP or UDP/TLS/RTP/SAVPF)
 fn detect_srtp_from_sdp(sdp: &str) -> bool {
-    // 尝试解析 SDP（sdp_type 参数在这里不重要，只为结构化解析）
-    // 使用 Offer 类型作为默认值，因为我们只检查属性，不依赖 sdp_type 逻辑
+    // Try to parse SDP (sdp_type is irrelevant here; we only inspect attributes structurally)
+    // Use Offer type as a default since we do not depend on any sdp_type-specific logic
     let desc = match SessionDescription::parse(SdpType::Offer, sdp) {
         Ok(d) => d,
         Err(e) => {
@@ -29,16 +29,16 @@ fn detect_srtp_from_sdp(sdp: &str) -> bool {
         }
     };
 
-    // 检查所有 media section
+    // Check all media sections
     for section in &desc.media_sections {
-        // 方法 1：检查 crypto 属性（SDES SRTP）
+        // Method 1: check for crypto attribute (SDES SRTP)
         let crypto_attrs = section.get_crypto_attributes();
         if !crypto_attrs.is_empty() {
             debug!(count = crypto_attrs.len(), "Found SDES crypto attributes");
             return true;
         }
 
-        // 方法 2：检查 fingerprint 属性（DTLS/SRTP）
+        // Method 2: check for fingerprint attribute (DTLS/SRTP)
         for attr in &section.attributes {
             if attr.key == "fingerprint" {
                 debug!(fingerprint = ?attr.value, "Found DTLS fingerprint");
@@ -46,7 +46,7 @@ fn detect_srtp_from_sdp(sdp: &str) -> bool {
             }
         }
 
-        // 方法 3：检查 protocol 字段包含 SAVP（表示 Secure Audio/Video Profile）
+        // Method 3: check protocol field for SAVP (Secure Audio/Video Profile)
         if section.protocol.contains("SAVP") {
             debug!(protocol = %section.protocol, "Found SRTP protocol in media line");
             return true;
@@ -75,28 +75,23 @@ fn build_dtmf_payload(event: u8, end: u8, volume: u8, duration: u16) -> Vec<u8> 
     payload
 }
 
-/// 创建配置（使用 RTP 模式兼容传统 SIP PBX）
+/// Create an RTP+ICE configuration compatible with legacy SIP PBXes and supporting NAT traversal.
 ///
-/// transport_mode 参数：
-/// - TransportMode::Rtp: 原始 RTP，无 ICE/DTLS（兼容传统 PBX）
-/// - TransportMode::Srtp: SDES SRTP 加密，不使用 DTLS
+/// `transport_mode` parameter:
+/// - TransportMode::Rtp:  plain RTP, no ICE/DTLS (compatible with legacy PBX)
+/// - TransportMode::Srtp: SDES SRTP encryption, no DTLS
 ///
-/// external_ip 参数：
-/// - Some(ip): 通过手动 STUN 查询得到的公网 IP，rustrtc 会将其写入 SDP candidate 地址
-/// - None: 仅使用本地 IP（无 NAT 环境）
-/// 创建配置（RTP + ICE 模式，兼容传统 PBX 且支持 NAT 穿透）
+/// Per RFC 8839, uses RTP/AVP + ICE to achieve:
+/// - Compatibility with legacy SIP PBXes (plain RTP, no encryption)
+/// - NAT traversal (public IP:port via STUN)
+/// - Dynamic address adaptation (RTP latching)
 ///
-/// 根据 RFC 8839，使用 RTP/AVP 协议 + ICE 来实现：
-/// - 兼容传统 SIP PBX（明文 RTP，无加密）
-/// - 支持 NAT 穿透（通过 STUN 获取公网 IP:port）
-/// - 动态地址适应（RTP latching）
-///
-/// 工作原理：
-/// 1. rustrtc 查询 STUN 服务器获取 server-reflexive candidates
-/// 2. SDP 中包含：
-///    - 协议：RTP/AVP（明文 RTP）
-///    - ICE 属性：a=ice-ufrag, a=ice-pwd, a=candidate
-///    - 正确的公网 IP 和 NAT 映射端口
+/// How it works:
+/// 1. rustrtc queries STUN servers to obtain server-reflexive candidates
+/// 2. The SDP includes:
+///    - Protocol: RTP/AVP (plain RTP)
+///    - ICE attributes: a=ice-ufrag, a=ice-pwd, a=candidate
+///    - Correct public IP and NAT-mapped port
 fn create_rtp_ice_config(transport_mode: TransportMode) -> RtcConfiguration {
     info!(transport_mode = ?transport_mode, "Creating RTP+ICE config for NAT traversal");
 
@@ -110,19 +105,19 @@ fn create_rtp_ice_config(transport_mode: TransportMode) -> RtcConfiguration {
         ],
         media_capabilities: Some(MediaCapabilities {
             audio: vec![
+                AudioCapability::opus(),
                 AudioCapability::pcmu(),
                 AudioCapability::pcma(),
                 AudioCapability::g722(),
                 AudioCapability::g729(),
-                AudioCapability::opus(),
                 AudioCapability::telephone_event(),
             ],
             video: vec![],
             application: None,
         }),
-        enable_latching: true, // 启用 RTP latching
-        // 注意：不设置 rtp_start_port/rtp_end_port，让操作系统动态分配端口
-        // 这样 ICE gathering 可以正常工作
+        enable_latching: true, // enable RTP latching
+        // Note: rtp_start_port/rtp_end_port are not set; let the OS assign ports dynamically
+        // so that ICE gathering works correctly
         ..Default::default()
     }
 }
@@ -196,7 +191,7 @@ fn inject_ice_attributes(sdp: &str) -> String {
     lines.join("\r\n") + "\r\n"
 }
 
-/// 等待 RTP 连接建立后，启动音频采集和播放。
+/// Wait for the RTP connection to be established, then start audio capture and playback.
 async fn start_audio(
     pc: &PeerConnection,
     audio_bridge: &mut AudioBridge,

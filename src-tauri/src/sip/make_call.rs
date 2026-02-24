@@ -13,8 +13,8 @@ use crate::webrtc::WebRtcSession;
 /// Make an outbound call with internally-generated SDP (from rustrtc).
 /// Returns (Dialog, WebRtcSession) on success.
 ///
-/// 根据 prefer_srtp 参数决定是否尝试 SRTP。
-/// 若 prefer_srtp=true 且对端返回 488 Not Acceptable，则自动降级为 RTP（使用新的 call_id）。
+/// SRTP negotiation is controlled by the prefer_srtp parameter.
+/// If prefer_srtp=true and the remote returns 488 Not Acceptable, automatically falls back to RTP (with a new call_id).
 pub async fn make_call(
     dialog_layer: Arc<DialogLayer>,
     mut invite_option: InviteOption,
@@ -30,7 +30,7 @@ pub async fn make_call(
 
     debug!(call_id = %call_id, caller = %caller, callee = %callee, prefer_srtp = prefer_srtp, "Preparing outbound call");
 
-    // 根据配置决定是否尝试 SRTP
+    // Attempt call with SRTP or RTP based on config
     let result = try_call_with_mode(
         &dialog_layer,
         &mut invite_option,
@@ -44,7 +44,7 @@ pub async fn make_call(
     )
     .await;
 
-    // 若启用了 SRTP 且对端返回 488 Not Acceptable，降级为 RTP 重试
+    // If SRTP was preferred and remote returned 488 Not Acceptable, retry with plain RTP
     if prefer_srtp {
         if let Err(Error::Error(ref msg)) = result {
             if msg.contains("488") || msg.contains("NotAcceptableHere") {
@@ -56,7 +56,7 @@ pub async fn make_call(
                     return Err(Error::Error("Call cancelled".to_string()));
                 }
 
-                // 生成新的 call_id 用于重试
+                // Generate a new call_id for the retry
                 let new_call_id = Uuid::new_v4().to_string();
                 invite_option.call_id = Some(new_call_id.clone());
 

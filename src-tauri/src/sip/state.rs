@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use crate::sip::message_inspector::SipFlow;
 use crate::webrtc::WebRtcSession;
 
-/// SIP 日志配置
+/// SIP flow log configuration
 #[derive(Clone, Serialize)]
 pub struct SipFlowConfig {
     pub enabled: bool,
@@ -20,13 +20,13 @@ pub struct SipFlowConfig {
 
 impl Default for SipFlowConfig {
     fn default() -> Self {
-        // 默认使用 $HOME/softphone/
+        // Default to $HOME/softphone/
         let log_dir = if let Some(home) = std::env::var_os("HOME") {
             let mut path = std::path::PathBuf::from(home);
             path.push("softphone");
             path.to_string_lossy().to_string()
         } else {
-            // 如果无法获取 HOME，回退到临时目录
+            // Fallback to temp dir if HOME is unavailable
             let mut temp = std::env::temp_dir();
             temp.push("softphone");
             temp.to_string_lossy().to_string()

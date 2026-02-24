@@ -79,10 +79,10 @@ pub fn initialize_logging(log_level: &str, ansi: bool) {
         }
     };
 
-    // 日志过滤器配置：
-    // - {level}: 全局日志级别（适用于所有 crate，包括 rsipstack、rsip 等）
-    // - log=warn: 将 `log` crate 的日志级别设为 WARN（减少底层库的噪音日志）
-    // 格式：directive1,directive2,... 例如 "info,log=warn,my_crate=debug"
+    // Log filter configuration:
+    // - {level}: global log level (applies to all crates including rsipstack, rsip, etc.)
+    // - log=warn: set the `log` crate level to WARN (reduce noise from underlying libraries)
+    // Format: directive1,directive2,... e.g. "info,log=warn,my_crate=debug"
     let filter = EnvFilter::new(format!("{level},log=warn"));
     let timer = tracing_subscriber::fmt::time::LocalTime::rfc_3339();
 

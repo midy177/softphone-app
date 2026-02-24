@@ -35,8 +35,8 @@ impl SipClient {
     /// Connect to SIP server, perform registration, and return a handle for making calls.
     ///
     /// # Parameters
-    /// - `enable_sip_flow`: 是否启用 SIP 消息流记录 (默认 true)
-    /// - `sip_flow_log_dir`: SIP 消息流日志目录 (默认 "logs")
+    /// - `enable_sip_flow`: whether to enable SIP message flow logging (default: false)
+    /// - `sip_flow_log_dir`: directory for SIP flow log files (default: "logs")
     pub async fn connect(
         app_handle: AppHandle,
         server: String,
@@ -220,7 +220,7 @@ impl SipClient {
         };
 
         // Create SIP flow inspector
-        let enable_flow = enable_sip_flow.unwrap_or(false); // 默认关闭
+        let enable_flow = enable_sip_flow.unwrap_or(false); // disabled by default
         let sip_flow = Arc::new(SipFlow::new(sip_flow_log_dir.as_deref(), enable_flow));
 
         // Create endpoint with SIP flow inspector
@@ -393,7 +393,7 @@ pub async fn handle_make_call(
         .insert(dialog_id_placeholder.clone(), call_cancel_token.clone());
     debug!(call_id = %call_id, "Registered pending call cancellation token");
 
-    // 外呼不需要 STUN 映射：PBX 会根据我们发送的 RTP 源地址做 latching
+    // Outbound calls do not need STUN mapping: the PBX will latch on our RTP source address
     let call_result = make_call::make_call(
         handle.dialog_layer.clone(),
         invite_option,
