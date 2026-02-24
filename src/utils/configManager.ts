@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 const APP_CONFIG_KEY = 'app-config'
 
@@ -10,6 +11,7 @@ interface AppConfig {
   prefer_srtp: boolean
   noise_reduce: boolean
   speaker_noise_reduce: boolean
+  always_on_top: boolean
 }
 
 // 向后兼容的旧配置 key
@@ -61,6 +63,10 @@ export async function restoreSipFlowConfig() {
 
       // 应用扬声器降噪配置到后端
       await invoke('set_speaker_noise_reduce', { enabled: config.speaker_noise_reduce ?? false })
+
+      // 应用始终置顶设置
+      const win = getCurrentWindow()
+      await win.setAlwaysOnTop(config.always_on_top ?? false)
 
       console.log('[Config] App config restored successfully')
       return true

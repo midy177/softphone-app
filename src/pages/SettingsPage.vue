@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useSipRegistration } from '@/composables/useSipRegistration'
 import { useAudio } from '@/composables/useAudio'
@@ -43,6 +44,10 @@ const noiseReduceLoading = ref(false)
 // 扬声器降噪
 const speakerNoiseReduce = ref(false)
 const speakerNoiseReduceLoading = ref(false)
+
+// 始终在最前端
+const alwaysOnTop = ref(false)
+const alwaysOnTopLoading = ref(false)
 
 async function toggleSipFlow() {
   console.log('[SettingsPage] toggleSipFlow called, current state:', sipFlowEnabled.value)
@@ -102,6 +107,7 @@ async function loadConfig() {
     preferSrtp.value = appConfig.prefer_srtp
     noiseReduce.value = appConfig.noise_reduce ?? false
     speakerNoiseReduce.value = appConfig.speaker_noise_reduce ?? false
+    alwaysOnTop.value = appConfig.always_on_top ?? false
     console.log('[SettingsPage] Loaded config from localStorage:', appConfig)
   } else {
     // 如果没有保存的配置，从后端获取默认值
@@ -125,6 +131,7 @@ async function loadConfig() {
         prefer_srtp: srtpConfig,
         noise_reduce: noiseReduceConfig,
         speaker_noise_reduce: speakerNoiseReduceConfig,
+        always_on_top: false,
       })
       console.log('[SettingsPage] Loaded default config from backend')
     } catch (e) {
@@ -183,8 +190,34 @@ async function toggleSpeakerNoiseReduce() {
   }
 }
 
-async function toggleSrtp() {
+async function toggleAlwaysOnTop() {
+  if (alwaysOnTopLoading.value) return
 
+  alwaysOnTopLoading.value = true
+  const newValue = !alwaysOnTop.value
+
+  try {
+    const win = getCurrentWindow()
+    await win.setAlwaysOnTop(newValue)
+    alwaysOnTop.value = newValue
+
+    const config = getAppConfig() || {
+      sip_flow: { enabled: sipFlowEnabled.value, log_dir: sipFlowDir.value },
+      prefer_srtp: preferSrtp.value,
+      noise_reduce: noiseReduce.value,
+      speaker_noise_reduce: speakerNoiseReduce.value,
+      always_on_top: newValue,
+    }
+    config.always_on_top = newValue
+    saveAppConfig(config)
+  } catch (e) {
+    console.error('[SettingsPage] Error setting always on top:', e)
+  } finally {
+    alwaysOnTopLoading.value = false
+  }
+}
+
+async function toggleSrtp() {
   srtpLoading.value = true
   const newEnabled = !preferSrtp.value
 
@@ -399,6 +432,32 @@ function handleBack() {
               :disabled="speakerNoiseReduceLoading"
             >
               {{ speakerNoiseReduce ? '已开启' : '已关闭' }}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <!-- 界面设置 -->
+      <Card>
+        <CardHeader>
+          <CardTitle>界面设置</CardTitle>
+          <CardDescription>控制窗口显示行为</CardDescription>
+        </CardHeader>
+        <CardContent class="space-y-4">
+          <div class="flex items-center justify-between">
+            <div class="space-y-0.5">
+              <Label>始终在最前端</Label>
+              <p class="text-sm text-muted-foreground">
+                窗口将浮动于所有其他应用之上，方便通话时快速操作
+              </p>
+            </div>
+            <Button
+              :variant="alwaysOnTop ? 'default' : 'outline'"
+              size="sm"
+              @click="toggleAlwaysOnTop"
+              :disabled="alwaysOnTopLoading"
+            >
+              {{ alwaysOnTop ? '已开启' : '已关闭' }}
             </Button>
           </div>
         </CardContent>
