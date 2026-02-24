@@ -328,6 +328,8 @@ async fn sip_make_call(state: State<'_, SipAppState>, callee: String) -> Result<
     let input_device = state.input_device.lock().await.clone();
     let output_device = state.output_device.lock().await.clone();
     let prefer_srtp = *state.prefer_srtp.lock().await;
+    let noise_reduce = *state.noise_reduce.lock().await;
+    let speaker_noise_reduce = *state.speaker_noise_reduce.lock().await;
 
     // Clone Arc<SipClientHandle> and release the lock immediately
     // so that sip_hangup can also acquire the lock concurrently
@@ -347,7 +349,7 @@ async fn sip_make_call(state: State<'_, SipAppState>, callee: String) -> Result<
         .ok_or_else(|| "No cancel token available".to_string())?
         .clone();
 
-    sip::handle_make_call(&handle, callee, input_device, output_device, cancel_token, prefer_srtp)
+    sip::handle_make_call(&handle, callee, input_device, output_device, cancel_token, prefer_srtp, noise_reduce, speaker_noise_reduce)
         .await
         .map_err(|e| {
             error!(error = ?e, "Make call failed");
@@ -375,6 +377,8 @@ async fn sip_hangup(state: State<'_, SipAppState>) -> Result<(), String> {
 async fn sip_answer_call(state: State<'_, SipAppState>, call_id: String) -> Result<(), String> {
     let input_device = state.input_device.lock().await.clone();
     let output_device = state.output_device.lock().await.clone();
+    let noise_reduce = *state.noise_reduce.lock().await;
+    let speaker_noise_reduce = *state.speaker_noise_reduce.lock().await;
 
     let handle = {
         let handle_guard = state.handle.lock().await;
@@ -392,7 +396,7 @@ async fn sip_answer_call(state: State<'_, SipAppState>, call_id: String) -> Resu
         .ok_or_else(|| "No cancel token available".to_string())?
         .clone();
 
-    sip::handle_answer_call(&handle, call_id, input_device, output_device, cancel_token)
+    sip::handle_answer_call(&handle, call_id, input_device, output_device, cancel_token, noise_reduce, speaker_noise_reduce)
         .await
         .map_err(|e| {
             error!(error = ?e, "Answer call failed");
@@ -434,6 +438,53 @@ async fn set_input_device(state: State<'_, SipAppState>, name: String) -> Result
 async fn set_output_device(state: State<'_, SipAppState>, name: String) -> Result<(), String> {
     *state.output_device.lock().await = Some(name);
     Ok(())
+}
+
+#[tauri::command]
+async fn get_noise_reduce(state: State<'_, SipAppState>) -> Result<bool, String> {
+    Ok(*state.noise_reduce.lock().await)
+}
+
+#[tauri::command]
+async fn set_noise_reduce(state: State<'_, SipAppState>, enabled: bool) -> Result<(), String> {
+    *state.noise_reduce.lock().await = enabled;
+
+    // Apply immediately to the active call if one exists
+    let handle_opt = state.handle.lock().await.clone();
+    if let Some(handle) = handle_opt {
+        sip::handle_set_noise_reduce(&handle, enabled).await;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_speaker_noise_reduce(state: State<'_, SipAppState>) -> Result<bool, String> {
+    Ok(*state.speaker_noise_reduce.lock().await)
+}
+
+#[tauri::command]
+async fn set_speaker_noise_reduce(state: State<'_, SipAppState>, enabled: bool) -> Result<(), String> {
+    *state.speaker_noise_reduce.lock().await = enabled;
+
+    // Apply immediately to the active call if one exists
+    let handle_opt = state.handle.lock().await.clone();
+    if let Some(handle) = handle_opt {
+        sip::handle_set_speaker_noise_reduce(&handle, enabled).await;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn toggle_noise_reduce(state: State<'_, SipAppState>) -> Result<bool, String> {
+    let handle = {
+        let handle_guard = state.handle.lock().await;
+        handle_guard
+            .as_ref()
+            .ok_or_else(|| "Not registered".to_string())?
+            .clone()
+    };
+
+    sip::handle_toggle_noise_reduce(&handle).await
 }
 
 #[tauri::command]
@@ -557,6 +608,8 @@ pub fn run() {
             output_device: tokio::sync::Mutex::new(None),
             sip_flow_config: tokio::sync::Mutex::new(sip::state::SipFlowConfig::default()),
             prefer_srtp: tokio::sync::Mutex::new(true), // 默认优先 SRTP
+            noise_reduce: tokio::sync::Mutex::new(false), // 默认关闭降噪
+            speaker_noise_reduce: tokio::sync::Mutex::new(false), // 默认关闭扬声器降噪
         })
         .invoke_handler(tauri::generate_handler![
             enumerate_audio_devices,
@@ -571,6 +624,11 @@ pub fn run() {
             set_output_device,
             toggle_mic_mute,
             toggle_speaker_mute,
+            toggle_noise_reduce,
+            get_noise_reduce,
+            set_noise_reduce,
+            get_speaker_noise_reduce,
+            set_speaker_noise_reduce,
             send_dtmf,
             set_sip_flow_enabled,
             set_sip_flow_dir,

@@ -8,6 +8,8 @@ interface AppConfig {
     log_dir: string
   }
   prefer_srtp: boolean
+  noise_reduce: boolean
+  speaker_noise_reduce: boolean
 }
 
 // 向后兼容的旧配置 key
@@ -33,6 +35,8 @@ export async function restoreSipFlowConfig() {
             log_dir: parsed.log_dir,
           },
           prefer_srtp: true, // 默认值
+          noise_reduce: false, // 默认值
+          speaker_noise_reduce: false, // 默认值
         }
         // 保存到新格式
         saveAppConfig(config)
@@ -51,6 +55,12 @@ export async function restoreSipFlowConfig() {
 
       // 应用 SRTP 配置到后端
       await invoke('set_prefer_srtp', { enabled: config.prefer_srtp })
+
+      // 应用降噪配置到后端
+      await invoke('set_noise_reduce', { enabled: config.noise_reduce ?? false })
+
+      // 应用扬声器降噪配置到后端
+      await invoke('set_speaker_noise_reduce', { enabled: config.speaker_noise_reduce ?? false })
 
       console.log('[Config] App config restored successfully')
       return true
@@ -92,6 +102,8 @@ export function saveSipFlowConfig(config: { enabled: boolean; log_dir: string })
   const appConfig = getAppConfig() || {
     sip_flow: { enabled: false, log_dir: '' },
     prefer_srtp: true,
+    noise_reduce: false,
+    speaker_noise_reduce: false,
   }
   appConfig.sip_flow = config
   saveAppConfig(appConfig)

@@ -354,6 +354,8 @@ pub async fn handle_make_call(
     output_device: Option<String>,
     global_cancel_token: CancellationToken,
     prefer_srtp: bool,
+    noise_reduce: bool,
+    speaker_noise_reduce: bool,
 ) -> rsipstack::Result<()> {
     let call_id = Uuid::new_v4().to_string();
 
@@ -434,6 +436,10 @@ pub async fn handle_make_call(
 
     // Call was successful and not cancelled - remove placeholder and create new token for active call
     handle.active_call_tokens.remove(&dialog_id_placeholder);
+
+    // Apply noise reduction settings before audio starts
+    webrtc_session.set_noise_reduce(noise_reduce);
+    webrtc_session.set_speaker_noise_reduce(speaker_noise_reduce);
 
     let call_cancel_token = global_cancel_token.child_token();
 
@@ -543,6 +549,40 @@ pub async fn handle_toggle_mic_mute(handle: &SipClientHandle) -> Result<bool, St
     }
 }
 
+/// Set microphone noise reduction for the active call (if any)
+pub async fn handle_set_noise_reduce(handle: &SipClientHandle, enabled: bool) {
+    let active = handle.active_call.lock().await;
+    if let Some(ref call) = *active {
+        if let Some(ref session) = call.webrtc_session {
+            session.set_noise_reduce(enabled);
+        }
+    }
+}
+
+/// Set speaker noise reduction for the active call (if any)
+pub async fn handle_set_speaker_noise_reduce(handle: &SipClientHandle, enabled: bool) {
+    let active = handle.active_call.lock().await;
+    if let Some(ref call) = *active {
+        if let Some(ref session) = call.webrtc_session {
+            session.set_speaker_noise_reduce(enabled);
+        }
+    }
+}
+
+/// Toggle microphone noise reduction for the active call
+pub async fn handle_toggle_noise_reduce(handle: &SipClientHandle) -> Result<bool, String> {
+    let active = handle.active_call.lock().await;
+    if let Some(ref call) = *active {
+        if let Some(ref session) = call.webrtc_session {
+            Ok(session.toggle_noise_reduce())
+        } else {
+            Err("No WebRTC session".to_string())
+        }
+    } else {
+        Err("No active call".to_string())
+    }
+}
+
 /// Toggle speaker mute for the active call
 pub async fn handle_toggle_speaker_mute(handle: &SipClientHandle) -> Result<bool, String> {
     let active = handle.active_call.lock().await;
@@ -564,6 +604,8 @@ pub async fn handle_answer_call(
     input_device: Option<String>,
     output_device: Option<String>,
     global_cancel_token: CancellationToken,
+    noise_reduce: bool,
+    speaker_noise_reduce: bool,
 ) -> rsipstack::Result<()> {
     info!(call_id = %call_id, "Answering incoming call");
 
@@ -587,6 +629,10 @@ pub async fn handle_answer_call(
     .map_err(|e| rsipstack::Error::Error(format!("Failed to create WebRTC session: {}", e)))?;
 
     info!(call_id = %call_id, "WebRTC session created, starting audio capture before 200 OK");
+
+    // Apply noise reduction settings before capture starts
+    webrtc_session.set_noise_reduce(noise_reduce);
+    webrtc_session.set_speaker_noise_reduce(speaker_noise_reduce);
 
     // Start audio capture BEFORE sending 200 OK to ensure we send RTP first
     // This allows NAT to create a mapping before PBX starts sending

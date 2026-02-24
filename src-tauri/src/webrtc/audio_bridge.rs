@@ -13,6 +13,7 @@ use tokio::sync::Notify;
 use tracing::{debug, error, info, warn};
 
 use super::codec::{CodecTypeExt, NegotiatedCodec};
+use super::denoiser::NoiseReducer;
 
 /// AudioBridge connects cpal audio I/O to rustrtc media tracks.
 pub struct AudioBridge {
@@ -20,6 +21,8 @@ pub struct AudioBridge {
     playback_stream: Option<cpal::Stream>,
     mic_muted: Arc<AtomicBool>,
     speaker_muted: Arc<AtomicBool>,
+    noise_reduce: Arc<AtomicBool>,
+    speaker_noise_reduce: Arc<AtomicBool>,
     stop_notify: Arc<Notify>,
     audio_source: SampleStreamSource,
     input_device_name: Option<String>,
@@ -65,6 +68,8 @@ impl AudioBridge {
             playback_stream: None,
             mic_muted: Arc::new(AtomicBool::new(false)),
             speaker_muted: Arc::new(AtomicBool::new(false)),
+            noise_reduce: Arc::new(AtomicBool::new(false)),
+            speaker_noise_reduce: Arc::new(AtomicBool::new(false)),
             stop_notify: Arc::new(Notify::new()),
             audio_source,
             input_device_name: input_device_name.map(|s| s.to_string()),
@@ -87,6 +92,7 @@ impl AudioBridge {
             &input_device,
             &self.audio_source,
             self.mic_muted.clone(),
+            self.noise_reduce.clone(),
             self.stop_notify.clone(),
             negotiated,
         )?;
@@ -115,6 +121,7 @@ impl AudioBridge {
             &output_device,
             remote_track,
             self.speaker_muted.clone(),
+            self.speaker_noise_reduce.clone(),
             self.stop_notify.clone(),
             negotiated,
         )?;
@@ -136,6 +143,48 @@ impl AudioBridge {
         let new_state = !prev;
         info!(muted = new_state, "Speaker mute toggled");
         new_state
+    }
+
+    /// Toggle microphone noise reduction. Returns new enabled state.
+    pub fn toggle_noise_reduce(&self) -> bool {
+        let prev = self.noise_reduce.fetch_xor(true, Ordering::Relaxed);
+        let new_state = !prev;
+        info!(enabled = new_state, "Noise reduction toggled");
+        new_state
+    }
+
+    /// Set microphone noise reduction to a specific state.
+    pub fn set_noise_reduce(&self, enabled: bool) {
+        self.noise_reduce.store(enabled, Ordering::Relaxed);
+        info!(enabled, "Noise reduction set");
+    }
+
+    /// Set speaker noise reduction to a specific state.
+    pub fn set_speaker_noise_reduce(&self, enabled: bool) {
+        self.speaker_noise_reduce.store(enabled, Ordering::Relaxed);
+        info!(enabled, "Speaker noise reduction set");
+    }
+
+    /// Send a single RFC 4733 telephone-event RTP packet.
+    /// Called repeatedly by send_dtmf() to transmit one DTMF event.
+    pub async fn send_dtmf_packet(
+        &self,
+        payload: &[u8],
+        pt: u8,
+        timestamp: u32,
+    ) -> Result<(), String> {
+        let frame = AudioFrame {
+            rtp_timestamp: timestamp,
+            clock_rate: 8000, // telephone-event clock is always 8000 Hz
+            data: Bytes::from(payload.to_vec()),
+            payload_type: Some(pt),
+            ..Default::default()
+        };
+        let source = self.audio_source.clone();
+        source
+            .send_audio(frame)
+            .await
+            .map_err(|_| "DTMF send channel closed".to_string())
     }
 
     pub fn close(&mut self) {
@@ -166,6 +215,7 @@ fn setup_capture_stream(
     device: &cpal::Device,
     audio_source: &SampleStreamSource,
     mic_muted: Arc<AtomicBool>,
+    noise_reduce: Arc<AtomicBool>,
     stop_notify: Arc<Notify>,
     negotiated: &NegotiatedCodec,
 ) -> Result<cpal::Stream, String> {
@@ -273,6 +323,10 @@ fn setup_capture_stream(
             None
         };
 
+        // Noise reducer at device rate: avoids double resampling (device→48k→device→codec).
+        // When device_sample_rate == 48000, NoiseReducer needs zero internal resampling.
+        let mut noise_reducer = NoiseReducer::new(device_sample_rate);
+
         let mut device_buf = vec![0.0f32; device_frame_samples];
         let mut rtp_timestamp: u32 = 0;
         let frame_interval = tokio::time::Duration::from_millis(frame_duration_ms as u64);
@@ -328,13 +382,27 @@ fn setup_capture_stream(
                 device_buf[i] = consumer.try_pop().unwrap_or(0.0);
             }
 
+            // Apply noise reduction at device rate BEFORE downsampling to codec rate.
+            // This avoids the double-resampling penalty (device→48k→device) that occurs
+            // when NoiseReducer runs at codec rate (e.g. 8 kHz → 48 kHz → 8 kHz internally).
+            let device_f32: Vec<f32> = if noise_reduce.load(Ordering::Relaxed) {
+                let device_i16: Vec<i16> = device_buf[..needed]
+                    .iter()
+                    .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+                    .collect();
+                let denoised = noise_reducer.process(&device_i16, needed);
+                denoised.iter().map(|&s| s as f32 / 32768.0).collect()
+            } else {
+                device_buf[..needed].to_vec()
+            };
+
             // Resample if needed (device rate → codec rate)
             let pcm_f32 = if let Some(ref mut resampler) = resampler {
                 use audioadapter_buffers::owned::InterleavedOwned;
                 use rubato::Resampler;
 
                 let input = InterleavedOwned::new_from(
-                    device_buf[..needed].to_vec(),
+                    device_f32,
                     1, // single channel
                     needed,
                 )
@@ -348,10 +416,10 @@ fn setup_capture_stream(
                     }
                 }
             } else {
-                device_buf[..frame_samples].to_vec()
+                device_f32[..frame_samples].to_vec()
             };
 
-            // Convert f32 → i16 → encode with negotiated codec
+            // Convert f32 → i16 at codec rate
             let pcm_i16: Vec<i16> = pcm_f32
                 .iter()
                 .map(|&s| {
@@ -359,6 +427,7 @@ fn setup_capture_stream(
                     (clamped * 32767.0) as i16
                 })
                 .collect();
+
             let encoded = codec_type.encode(&pcm_i16);
 
             let frame = AudioFrame {
@@ -385,6 +454,7 @@ fn setup_playback_stream(
     device: &cpal::Device,
     remote_track: Arc<SampleStreamTrack>,
     speaker_muted: Arc<AtomicBool>,
+    speaker_noise_reduce: Arc<AtomicBool>,
     stop_notify: Arc<Notify>,
     negotiated: &NegotiatedCodec,
 ) -> Result<cpal::Stream, String> {
@@ -440,6 +510,10 @@ fn setup_playback_stream(
             None
         };
 
+        // Speaker noise reducer at device rate: avoids double resampling.
+        // When device_sample_rate == 48000, NoiseReducer needs zero internal resampling.
+        let mut speaker_noise_reducer = NoiseReducer::new(device_sample_rate);
+
         loop {
             tokio::select! {
                 result = remote_track.recv() => {
@@ -459,7 +533,7 @@ fn setup_playback_stream(
                                 continue;
                             }
 
-                            // Decode with negotiated codec → i16 → f32
+                            // Decode with negotiated codec → i16
                             let pcm_i16 = codec_type.decode(&frame.data);
 
                             // Skip if decoded data is too small
@@ -505,6 +579,21 @@ fn setup_playback_stream(
                                 }
                             } else {
                                 pcm_f32
+                            };
+
+                            // Apply speaker noise reduction at device rate AFTER upsampling.
+                            // Denoiser runs at device rate (usually 48 kHz) with zero internal
+                            // resampling, avoiding the codec_rate→48k→codec_rate round-trip.
+                            let output_samples = if speaker_noise_reduce.load(Ordering::Relaxed) {
+                                let out_len = output_samples.len();
+                                let device_i16: Vec<i16> = output_samples
+                                    .iter()
+                                    .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+                                    .collect();
+                                let denoised = speaker_noise_reducer.process(&device_i16, out_len);
+                                denoised.iter().map(|&s| s as f32 / 32768.0).collect()
+                            } else {
+                                output_samples
                             };
 
                             // Write to ring buffer, duplicating to all channels

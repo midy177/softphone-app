@@ -36,6 +36,14 @@ const sipFlowDir = ref('')
 const preferSrtp = ref(true)
 const srtpLoading = ref(false)
 
+// 麦克风降噪
+const noiseReduce = ref(false)
+const noiseReduceLoading = ref(false)
+
+// 扬声器降噪
+const speakerNoiseReduce = ref(false)
+const speakerNoiseReduceLoading = ref(false)
+
 async function toggleSipFlow() {
   console.log('[SettingsPage] toggleSipFlow called, current state:', sipFlowEnabled.value)
   if (sipFlowLoading.value) {
@@ -59,6 +67,8 @@ async function toggleSipFlow() {
     const config = getAppConfig() || {
       sip_flow: { enabled: newEnabled, log_dir: sipFlowDir.value },
       prefer_srtp: preferSrtp.value,
+      noise_reduce: noiseReduce.value,
+      speaker_noise_reduce: speakerNoiseReduce.value,
     }
     config.sip_flow.enabled = newEnabled
     saveAppConfig(config)
@@ -90,6 +100,8 @@ async function loadConfig() {
     sipFlowEnabled.value = appConfig.sip_flow.enabled
     sipFlowDir.value = appConfig.sip_flow.log_dir
     preferSrtp.value = appConfig.prefer_srtp
+    noiseReduce.value = appConfig.noise_reduce ?? false
+    speakerNoiseReduce.value = appConfig.speaker_noise_reduce ?? false
     console.log('[SettingsPage] Loaded config from localStorage:', appConfig)
   } else {
     // 如果没有保存的配置，从后端获取默认值
@@ -101,10 +113,18 @@ async function loadConfig() {
       const srtpConfig = await invoke<boolean>('get_prefer_srtp')
       preferSrtp.value = srtpConfig
 
+      const noiseReduceConfig = await invoke<boolean>('get_noise_reduce')
+      noiseReduce.value = noiseReduceConfig
+
+      const speakerNoiseReduceConfig = await invoke<boolean>('get_speaker_noise_reduce')
+      speakerNoiseReduce.value = speakerNoiseReduceConfig
+
       // 保存默认配置
       saveAppConfig({
         sip_flow: sipFlowConfig,
         prefer_srtp: srtpConfig,
+        noise_reduce: noiseReduceConfig,
+        speaker_noise_reduce: speakerNoiseReduceConfig,
       })
       console.log('[SettingsPage] Loaded default config from backend')
     } catch (e) {
@@ -113,8 +133,57 @@ async function loadConfig() {
   }
 }
 
+async function toggleNoiseReduce() {
+  if (noiseReduceLoading.value) return
+
+  noiseReduceLoading.value = true
+  const newEnabled = !noiseReduce.value
+
+  try {
+    await invoke('set_noise_reduce', { enabled: newEnabled })
+    noiseReduce.value = newEnabled
+
+    const config = getAppConfig() || {
+      sip_flow: { enabled: sipFlowEnabled.value, log_dir: sipFlowDir.value },
+      prefer_srtp: preferSrtp.value,
+      noise_reduce: newEnabled,
+      speaker_noise_reduce: speakerNoiseReduce.value,
+    }
+    config.noise_reduce = newEnabled
+    saveAppConfig(config)
+  } catch (e) {
+    console.error('[SettingsPage] Error setting noise reduce:', e)
+  } finally {
+    noiseReduceLoading.value = false
+  }
+}
+
+async function toggleSpeakerNoiseReduce() {
+  if (speakerNoiseReduceLoading.value) return
+
+  speakerNoiseReduceLoading.value = true
+  const newEnabled = !speakerNoiseReduce.value
+
+  try {
+    await invoke('set_speaker_noise_reduce', { enabled: newEnabled })
+    speakerNoiseReduce.value = newEnabled
+
+    const config = getAppConfig() || {
+      sip_flow: { enabled: sipFlowEnabled.value, log_dir: sipFlowDir.value },
+      prefer_srtp: preferSrtp.value,
+      noise_reduce: noiseReduce.value,
+      speaker_noise_reduce: newEnabled,
+    }
+    config.speaker_noise_reduce = newEnabled
+    saveAppConfig(config)
+  } catch (e) {
+    console.error('[SettingsPage] Error setting speaker noise reduce:', e)
+  } finally {
+    speakerNoiseReduceLoading.value = false
+  }
+}
+
 async function toggleSrtp() {
-  if (srtpLoading.value) return
 
   srtpLoading.value = true
   const newEnabled = !preferSrtp.value
@@ -127,6 +196,8 @@ async function toggleSrtp() {
     const config = getAppConfig() || {
       sip_flow: { enabled: sipFlowEnabled.value, log_dir: sipFlowDir.value },
       prefer_srtp: newEnabled,
+      noise_reduce: noiseReduce.value,
+      speaker_noise_reduce: speakerNoiseReduce.value,
     }
     config.prefer_srtp = newEnabled
     saveAppConfig(config)
@@ -159,6 +230,8 @@ async function selectLogFolder() {
       const config = getAppConfig() || {
         sip_flow: { enabled: sipFlowEnabled.value, log_dir: selected },
         prefer_srtp: preferSrtp.value,
+        noise_reduce: noiseReduce.value,
+        speaker_noise_reduce: speakerNoiseReduce.value,
       }
       config.sip_flow.log_dir = selected
       saveAppConfig(config)
@@ -292,6 +365,40 @@ function handleBack() {
               :disabled="srtpLoading"
             >
               {{ preferSrtp ? '已开启' : '已关闭' }}
+            </Button>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <div class="space-y-0.5">
+              <Label>麦克风降噪</Label>
+              <p class="text-sm text-muted-foreground">
+                使用 RNNoise 神经网络算法实时过滤背景噪音，通话中可随时切换
+              </p>
+            </div>
+            <Button
+              :variant="noiseReduce ? 'default' : 'outline'"
+              size="sm"
+              @click="toggleNoiseReduce"
+              :disabled="noiseReduceLoading"
+            >
+              {{ noiseReduce ? '已开启' : '已关闭' }}
+            </Button>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <div class="space-y-0.5">
+              <Label>扬声器降噪</Label>
+              <p class="text-sm text-muted-foreground">
+                使用 RNNoise 神经网络算法过滤通话对端的背景噪音，通话中可随时切换
+              </p>
+            </div>
+            <Button
+              :variant="speakerNoiseReduce ? 'default' : 'outline'"
+              size="sm"
+              @click="toggleSpeakerNoiseReduce"
+              :disabled="speakerNoiseReduceLoading"
+            >
+              {{ speakerNoiseReduce ? '已开启' : '已关闭' }}
             </Button>
           </div>
         </CardContent>

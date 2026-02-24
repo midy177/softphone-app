@@ -1,5 +1,6 @@
 pub mod audio_bridge;
 pub mod codec;
+pub mod denoiser;
 
 use rustrtc::config::MediaCapabilities;
 use rustrtc::{
@@ -237,6 +238,10 @@ pub struct WebRtcSession {
     pc: PeerConnection,
     audio_bridge: AudioBridge,
     closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Negotiated telephone-event payload type (RFC 4733), default 101
+    telephone_event_pt: u8,
+    /// RTP timestamp counter for DTMF events (8 kHz clock)
+    dtmf_timestamp: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl WebRtcSession {
@@ -333,6 +338,8 @@ impl WebRtcSession {
             pc,
             audio_bridge,
             closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            telephone_event_pt: 101,
+            dtmf_timestamp: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         };
 
         info!("WebRTC outbound session created");
@@ -518,6 +525,8 @@ impl WebRtcSession {
             pc,
             audio_bridge,
             closed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            telephone_event_pt: 101,
+            dtmf_timestamp: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
         };
 
         info!("WebRTC inbound session created with Answerer mode");
@@ -529,6 +538,9 @@ impl WebRtcSession {
     pub async fn start_inbound_media_early(&mut self, sdp_offer: &str) -> Result<(), String> {
         // Parse negotiated codec from SDP offer
         let negotiated = codec::parse_negotiated_codec(sdp_offer);
+
+        // Store negotiated telephone-event payload type
+        self.telephone_event_pt = negotiated.telephone_event_pt.unwrap_or(101);
 
         info!("Starting audio capture early (before 200 OK)...");
 
@@ -592,6 +604,9 @@ impl WebRtcSession {
         // Parse negotiated codec from SDP answer
         let negotiated = codec::parse_negotiated_codec(sdp_answer);
 
+        // Store negotiated telephone-event payload type
+        self.telephone_event_pt = negotiated.telephone_event_pt.unwrap_or(101);
+
         // Check if remote supports SRTP
         let remote_uses_srtp = detect_srtp_from_sdp(sdp_answer);
 
@@ -630,10 +645,25 @@ impl WebRtcSession {
         self.audio_bridge.toggle_speaker_mute()
     }
 
+    /// Toggle microphone noise reduction. Returns new enabled state.
+    pub fn toggle_noise_reduce(&self) -> bool {
+        self.audio_bridge.toggle_noise_reduce()
+    }
+
+    /// Set microphone noise reduction to a specific state.
+    pub fn set_noise_reduce(&self, enabled: bool) {
+        self.audio_bridge.set_noise_reduce(enabled);
+    }
+
+    /// Set speaker noise reduction to a specific state.
+    pub fn set_speaker_noise_reduce(&self, enabled: bool) {
+        self.audio_bridge.set_speaker_noise_reduce(enabled);
+    }
+
     /// Send DTMF digit (0-9, *, #, A-D) via RFC 4733 telephone-event.
     pub async fn send_dtmf(&self, digit: char) -> Result<(), String> {
         // Map digit to event code (RFC 4733)
-        let event_code = match digit {
+        let event_code: u8 = match digit {
             '0' => 0,
             '1' => 1,
             '2' => 2,
@@ -653,43 +683,42 @@ impl WebRtcSession {
             _ => return Err(format!("Invalid DTMF digit: {}", digit)),
         };
 
-        info!(digit = %digit, event_code = event_code, "Sending DTMF");
+        info!(
+            digit = %digit,
+            event_code = event_code,
+            telephone_event_pt = self.telephone_event_pt,
+            "Sending DTMF"
+        );
 
-        // Get the audio transceiver
-        let transceivers = self.pc.get_transceivers();
-        let _audio_transceiver = transceivers
-            .iter()
-            .find(|t| t.kind() == MediaKind::Audio)
-            .ok_or("No audio transceiver found")?;
-
-        // TODO: Implement actual RTP packet sending
-        // rustrtc may not expose direct RTP transport sending API
-        // Options:
-        // 1. Use rustrtc's DTMFSender if available
-        // 2. Add rtp-rs dependency and send via raw socket
-        // 3. Wait for rustrtc API updates
-
-        // For now, simulate DTMF by logging
-        // Duration: 160ms (1280 timestamp units at 8kHz), send 8 packets (20ms each)
-        const PACKET_DURATION: u16 = 160; // 20ms at 8kHz
+        // RFC 4733: 8 packets × 20ms = 160ms total event duration at 8 kHz clock
+        // All packets for the same event share the same base timestamp (event start).
+        // The duration field increases by 160 per packet (20ms × 8000 Hz / 1000 = 160).
+        // Last 3 packets have the End (E) bit set.
+        const PACKET_DURATION: u16 = 160; // timestamp units per 20ms at 8 kHz
         const TOTAL_PACKETS: usize = 8;
-        const VOLUME: u8 = 10; // 0 = loudest, 63 = silence
+        const VOLUME: u8 = 10; // dBm0, 0 = loudest, 63 = silence
+
+        // Reserve a base timestamp for this event (advances counter for next event)
+        let base_ts = self.dtmf_timestamp.fetch_add(
+            PACKET_DURATION as u32 * TOTAL_PACKETS as u32,
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         for i in 0..TOTAL_PACKETS {
             let duration = PACKET_DURATION * (i as u16 + 1);
-            let end_bit = if i >= TOTAL_PACKETS - 3 { 1 } else { 0 }; // Mark last 3 packets as End
+            let end_bit: u8 = if i >= TOTAL_PACKETS - 3 { 1 } else { 0 };
 
-            // Build telephone-event payload (4 bytes)
-            let _payload = build_dtmf_payload(event_code, end_bit, VOLUME, duration);
+            // Build RFC 4733 telephone-event payload (4 bytes)
+            let payload = build_dtmf_payload(event_code, end_bit, VOLUME, duration);
 
-            // TODO: Send RTP packet with payload type 101
-            // Currently blocked by rustrtc API limitations
+            self.audio_bridge
+                .send_dtmf_packet(&payload, self.telephone_event_pt, base_ts)
+                .await?;
 
-            // Wait 20ms before next packet
             tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
         }
 
-        info!(digit = %digit, "DTMF simulation completed (actual RTP sending not yet implemented)");
+        info!(digit = %digit, "DTMF sent successfully");
         Ok(())
     }
 

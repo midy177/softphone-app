@@ -75,6 +75,8 @@ pub struct NegotiatedCodec {
     pub payload_type: u8,
     pub clock_rate: u32,
     pub ptime_ms: u32,
+    /// RFC 4733 telephone-event payload type (dynamic, typically 101)
+    pub telephone_event_pt: Option<u8>,
 }
 
 impl NegotiatedCodec {
@@ -91,6 +93,7 @@ impl Default for NegotiatedCodec {
             payload_type: 0,
             clock_rate: 8000,
             ptime_ms: 20,
+            telephone_event_pt: None,
         }
     }
 }
@@ -131,6 +134,11 @@ pub fn parse_negotiated_codec(sdp: &str) -> NegotiatedCodec {
                     if let Ok(pt) = parts[0].parse::<u8>() {
                         let codec_parts: Vec<&str> = parts[1].split('/').collect();
                         if let Some(&codec_name) = codec_parts.first() {
+                            // Check for telephone-event on every rtpmap line
+                            if codec_name.to_uppercase() == "TELEPHONE-EVENT" {
+                                result.telephone_event_pt = Some(pt);
+                            }
+
                             let codec = match codec_name.to_uppercase().as_str() {
                                 "PCMU" => Some(CodecType::PCMU),
                                 "PCMA" => Some(CodecType::PCMA),
