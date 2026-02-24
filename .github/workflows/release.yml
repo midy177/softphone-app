@@ -18,7 +18,7 @@ jobs:
             args: '--target aarch64-apple-darwin'
           - platform: macos-13          # macOS x86_64 (Intel)
             args: '--target x86_64-apple-darwin'
-          - platform: ubuntu-22.04      # Linux x86_64
+          - platform: ubuntu-24.04      # Linux x86_64
             args: ''
           - platform: windows-latest    # Windows x86_64
             args: ''
@@ -40,9 +40,9 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # ── Linux 系统依赖 ────────────────────────────────────────────────────
+      # ── Linux system dependencies ─────────────────────────────────────────
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -53,30 +53,30 @@ jobs:
             libpulse-dev \
             libasound2-dev
 
-      # ── Bun + 前端依赖 ───────────────────────────────────────────────────
+      # ── Bun + frontend dependencies ──────────────────────────────────────
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
 
       - name: Install frontend dependencies
         run: bun install
 
-      # ── 构建 ─────────────────────────────────────────────────────────────
+      # ── Build ─────────────────────────────────────────────────────────────
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'SIP 软电话 ${{ github.ref_name }}'
+          releaseName: 'SIP Softphone ${{ github.ref_name }}'
           releaseBody: |
-            ## 下载
+            ## Downloads
 
-            | 平台 | 文件 |
-            |------|------|
+            | Platform | File |
+            |----------|------|
             | macOS (Apple Silicon) | `*_aarch64.dmg` |
-            | macOS (Intel) | `*_x64.dmg` |
-            | Windows | `*_x64-setup.exe` |
-            | Linux | `*_amd64.deb` / `*_amd64.AppImage` |
+            | macOS (Intel)         | `*_x64.dmg` |
+            | Windows               | `*_x64-setup.exe` |
+            | Linux                 | `*_amd64.deb` / `*_amd64.AppImage` |
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
