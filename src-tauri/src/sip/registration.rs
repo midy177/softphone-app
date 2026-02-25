@@ -7,6 +7,7 @@ use tokio::select;
 use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
+use uuid::Uuid;
 
 /// Perform a single REGISTER request, returns expires value on success
 pub async fn register_once(registration: &mut Registration, sip_server: rsip::Uri) -> Result<u64> {
@@ -41,6 +42,12 @@ pub async fn registration_refresh_loop(
     cancel_token: CancellationToken,
 ) -> Result<()> {
     let mut registration = Registration::new(endpoint, Some(credential));
+    // Override the default Call-ID (which uses @restsend.com) with a proper UUID-based one.
+    // Extract the server host for the domain part of the Call-ID.
+    let server_host = sip_server.host_with_port.host.to_string();
+    registration.call_id = rsip::headers::CallId::from(
+        format!("{}@{}", Uuid::new_v4().simple(), server_host),
+    );
     let refresh_time = initial_expires * 3 / 4;
 
     debug!(server = %sip_server, refresh_in = refresh_time, "Starting registration refresh loop");
