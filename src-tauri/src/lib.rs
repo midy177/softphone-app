@@ -206,7 +206,7 @@ fn enumerate_audio_devices_cpal_fallback(host: &cpal::Host) -> Result<AudioDevic
     use cpal::traits::{DeviceTrait, HostTrait};
     use tracing::warn;
 
-    let (mut inputs, mut outputs) = with_suppressed_stderr(|| {
+    let (inputs, outputs) = with_suppressed_stderr(|| {
         let mut inputs = Vec::new();
         let mut outputs = Vec::new();
 
