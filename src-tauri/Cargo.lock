@@ -5006,7 +5006,7 @@ dependencies = [
 
 [[package]]
 name = "softphone-app"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "audio-codec",
  "audioadapter-buffers",
@@ -5016,6 +5016,7 @@ dependencies = [
  "dashmap",
  "futures-util",
  "get_if_addrs",
+ "libc",
  "nnnoiseless",
  "pulsectl-rs",
  "ringbuf",
