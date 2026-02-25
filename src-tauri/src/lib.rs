@@ -21,8 +21,45 @@ struct AudioDevices {
     outputs: Vec<AudioDevice>,
 }
 
+/// Linux-specific: Read `/proc/asound/cards` to build a map of card index → ALSA short name.
+///
+/// Example line: " 0 [PCH            ]: HDA-Intel - HDA Intel PCH"
+/// Produces: {0: "PCH", 1: "Headset", ...}
+///
+/// The ALSA short name is the authoritative bridge between:
+/// - cpal device IDs:     `alsa:plughw:CARD=PCH,DEV=0`  (contains short name directly)
+/// - PulseAudio proplist: `alsa.card = "0"`              (numeric index → short name lookup)
+#[cfg(target_os = "linux")]
+fn get_alsa_card_short_names() -> std::collections::HashMap<u32, String> {
+    let mut map = std::collections::HashMap::new();
+    let Ok(content) = std::fs::read_to_string("/proc/asound/cards") else {
+        return map;
+    };
+    for line in content.lines() {
+        let line = line.trim();
+        let Some(b_start) = line.find('[') else { continue };
+        let Some(b_end) = line.find(']') else { continue };
+        if b_start == 0 {
+            continue; // no card number before '['
+        }
+        let Ok(num) = line[..b_start].trim().parse::<u32>() else { continue };
+        let short = line[b_start + 1..b_end].trim().to_string();
+        if !short.is_empty() {
+            map.insert(num, short);
+        }
+    }
+    map
+}
+
 /// Linux-specific: Query PulseAudio/PipeWire for friendly device names.
-/// Returns maps keyed by "card_name:device_num" (compound) and "card_name" (fallback).
+///
+/// Returns two maps keyed by ALSA card short name (e.g. "PCH", "Headset"):
+/// - compound key: "PCH:0"  (card_short:dev_num, preferred)
+/// - fallback key: "PCH"    (card_short only, first match wins)
+///
+/// Matching strategy (most → least reliable):
+/// 1. `alsa.card` (numeric index) → look up in /proc/asound/cards → ALSA short name
+/// 2. Fallback: `alsa.card_name` used directly as key
 #[cfg(target_os = "linux")]
 fn get_pulse_friendly_names() -> (
     std::collections::HashMap<String, String>,
@@ -30,12 +67,14 @@ fn get_pulse_friendly_names() -> (
 ) {
     use pulsectl::controllers::{DeviceControl, SinkController, SourceController};
     use std::collections::HashMap;
-    use tracing::{debug, info, warn};
+    use tracing::{debug, warn};
+
+    let card_short_names = get_alsa_card_short_names();
+    debug!(cards = ?card_short_names, "ALSA card short names from /proc/asound/cards");
 
     let mut input_map = HashMap::new();
     let mut output_map = HashMap::new();
 
-    // Helper: insert both compound key "card:dev" and fallback key "card"
     fn insert_device(
         map: &mut HashMap<String, String>,
         card: &str,
@@ -45,76 +84,67 @@ fn get_pulse_friendly_names() -> (
         if let Some(ref d) = dev {
             map.insert(format!("{}:{}", card, d), friendly.clone());
         }
-        // Fallback: card-only key (first one wins)
         map.entry(card.to_string()).or_insert(friendly);
     }
 
-    // Get input devices (sources) via SourceController
+    // Resolve ALSA short name from a PulseAudio device proplist.
+    // Primary: alsa.card (numeric) → /proc/asound/cards short name
+    // Fallback: alsa.card_name string (older PulseAudio / non-PipeWire)
+    let resolve_short_name =
+        |proplist: &pulsectl::controllers::types::PropList| -> Option<String> {
+            proplist
+                .get_str("alsa.card")
+                .and_then(|s| s.parse::<u32>().ok())
+                .and_then(|n| card_short_names.get(&n).cloned())
+                .or_else(|| proplist.get_str("alsa.card_name"))
+        };
+
     match SourceController::create() {
-        Ok(mut source_ctrl) => {
-            if let Ok(sources) = source_ctrl.list_devices() {
-                for source in sources {
-                    // Skip monitor sources (loopback of output, not real microphones)
-                    if source.monitor.is_some() {
+        Ok(mut ctrl) => {
+            if let Ok(sources) = ctrl.list_devices() {
+                for src in sources {
+                    if src.monitor.is_some() {
                         continue;
                     }
-
-                    let card_name = source
-                        .proplist
-                        .get_str("alsa.card_name")
-                        .or_else(|| source.proplist.get_str("device.product.name"));
-                    let device_num = source.proplist.get_str("alsa.device");
-
-                    if let Some(card) = card_name {
-                        let friendly_name = source
+                    if let Some(short) = resolve_short_name(&src.proplist) {
+                        let dev = src.proplist.get_str("alsa.device");
+                        let friendly = src
                             .description
-                            .unwrap_or_else(|| source.name.unwrap_or_default());
-                        debug!(card = %card, dev = ?device_num, friendly = %friendly_name, "PulseAudio source");
-                        insert_device(&mut input_map, &card, device_num, friendly_name);
+                            .unwrap_or_else(|| src.name.unwrap_or_default());
+                        debug!(card = %short, dev = ?dev, friendly = %friendly, "PulseAudio source");
+                        insert_device(&mut input_map, &short, dev, friendly);
                     }
                 }
             }
         }
-        Err(e) => {
-            warn!(error = %e, "Failed to connect to PulseAudio SourceController");
-        }
+        Err(e) => warn!(error = %e, "Failed to connect to PulseAudio SourceController"),
     }
 
-    // Get output devices (sinks) via SinkController
     match SinkController::create() {
-        Ok(mut sink_ctrl) => {
-            if let Ok(sinks) = sink_ctrl.list_devices() {
+        Ok(mut ctrl) => {
+            if let Ok(sinks) = ctrl.list_devices() {
                 for sink in sinks {
-                    let card_name = sink
-                        .proplist
-                        .get_str("alsa.card_name")
-                        .or_else(|| sink.proplist.get_str("device.product.name"));
-                    let device_num = sink.proplist.get_str("alsa.device");
-
-                    if let Some(card) = card_name {
-                        let friendly_name = sink
+                    if let Some(short) = resolve_short_name(&sink.proplist) {
+                        let dev = sink.proplist.get_str("alsa.device");
+                        let friendly = sink
                             .description
                             .unwrap_or_else(|| sink.name.unwrap_or_default());
-                        debug!(card = %card, dev = ?device_num, friendly = %friendly_name, "PulseAudio sink");
-                        insert_device(&mut output_map, &card, device_num, friendly_name);
+                        debug!(card = %short, dev = ?dev, friendly = %friendly, "PulseAudio sink");
+                        insert_device(&mut output_map, &short, dev, friendly);
                     }
                 }
             }
         }
-        Err(e) => {
-            warn!(error = %e, "Failed to connect to PulseAudio SinkController");
-        }
+        Err(e) => warn!(error = %e, "Failed to connect to PulseAudio SinkController"),
     }
 
-    info!(input_keys = ?input_map.keys().collect::<Vec<_>>(), output_keys = ?output_map.keys().collect::<Vec<_>>(), "PulseAudio friendly name map loaded");
+    debug!(
+        input_keys = ?input_map.keys().collect::<Vec<_>>(),
+        output_keys = ?output_map.keys().collect::<Vec<_>>(),
+        "PulseAudio friendly name map loaded"
+    );
 
     (input_map, output_map)
-}
-
-/// Extract card name from ALSA description (e.g., "HDA Intel PCH, ALC897 Analog" → "HDA Intel PCH").
-#[cfg(target_os = "linux")]
-fn extract_alsa_card_name(alsa_desc: &str) -> Option<String> {
-    alsa_desc.split(',').next().map(|s| s.trim().to_string())
 }
 
 /// Extract DEV number from cpal local ID (e.g., "plughw:CARD=PCH,DEV=0" → "0").
@@ -171,23 +201,30 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
             .map(|d| d.to_string())
             .unwrap_or_else(|_| id.clone());
 
-        // On Linux, try to find a friendly name from PulseAudio
-        // Devices without a PulseAudio match (except "default") are skipped — no active hardware
+        // On Linux, resolve friendly name from PulseAudio using the ALSA card short name.
+        // The short name is embedded directly in the cpal device ID:
+        //   "plughw:CARD=PCH,DEV=0"  →  card_short = "PCH", dev_num = "0"
+        // The pulse maps were built with the same short names (via /proc/asound/cards),
+        // so the lookup is exact and does not depend on description string matching.
         #[cfg(target_os = "linux")]
         let (input_desc, output_desc) = {
             if local_id == "default" {
                 (Some(cpal_desc.clone()), Some(cpal_desc))
-            } else if let Some(card_name) = extract_alsa_card_name(&cpal_desc) {
+            } else if let Some(card_short) = local_id
+                .strip_prefix("plughw:CARD=")
+                .and_then(|s| s.split(',').next())
+            {
                 let dev_num = extract_dev_number(local_id);
-                let compound_key = dev_num.as_ref().map(|d| format!("{}:{}", card_name, d));
+                let compound_key = dev_num.as_ref().map(|d| format!("{}:{}", card_short, d));
 
-                let resolve = |map: &std::collections::HashMap<String, String>| -> Option<String> {
-                    compound_key
-                        .as_ref()
-                        .and_then(|k| map.get(k))
-                        .or_else(|| map.get(&card_name))
-                        .cloned()
-                };
+                let resolve =
+                    |map: &std::collections::HashMap<String, String>| -> Option<String> {
+                        compound_key
+                            .as_ref()
+                            .and_then(|k| map.get(k))
+                            .or_else(|| map.get(card_short))
+                            .cloned()
+                    };
 
                 (resolve(&pulse_input_map), resolve(&pulse_output_map))
             } else {
