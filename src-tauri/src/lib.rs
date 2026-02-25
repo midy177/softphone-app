@@ -4,7 +4,7 @@ mod webrtc;
 
 use rustls;
 use sip::state::SipAppState;
-use tauri::State;
+use tauri::{Manager, State};
 use tracing::error;
 
 // ── Audio device enumeration via cpal ──
@@ -650,6 +650,28 @@ pub fn run() {
             get_prefer_srtp,
             set_prefer_srtp,
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Prevent the default close so we can send SIP UNREGISTER first.
+                // registration_refresh_loop sends REGISTER expires=0 when the
+                // cancel_token is cancelled, then the window is closed explicitly.
+                api.prevent_close();
+                let app = window.app_handle().clone();
+                let win = window.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = app.state::<SipAppState>();
+                    if let Some(token) = state.cancel_token.lock().await.take() {
+                        token.cancel();
+                        // Give registration_refresh_loop time to send UNREGISTER.
+                        // 500 ms is sufficient for LAN/fast WAN; the server's
+                        // expires timer handles cleanup if the network is slower.
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    }
+                    state.handle.lock().await.take();
+                    let _ = win.close();
+                });
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
