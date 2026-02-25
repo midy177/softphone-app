@@ -335,7 +335,7 @@ async fn sip_register(
     // Get SIP flow config
     let sip_flow_config = state.sip_flow_config.lock().await.clone();
 
-    match sip::SipClient::connect(
+    match sip::Client::connect(
         app_handle,
         server,
         username,

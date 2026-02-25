@@ -28,9 +28,9 @@ pub mod message_inspector;
 mod registration;
 pub mod state;
 
-pub struct SipClient;
+pub struct Client;
 
-impl SipClient {
+impl Client {
     /// Connect to SIP server, perform registration, and return a handle for making calls.
     ///
     /// # Parameters
