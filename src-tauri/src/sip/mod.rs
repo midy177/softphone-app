@@ -8,7 +8,6 @@ use rsip::Uri;
 use rsipstack::dialog::authenticate::Credential;
 use rsipstack::dialog::dialog_layer::DialogLayer;
 use rsipstack::dialog::invitation::InviteOption;
-use rsipstack::dialog::registration::Registration;
 use rsipstack::transport::TransportLayer;
 use rsipstack::EndpointBuilder;
 use std::collections::HashMap;
@@ -297,8 +296,7 @@ impl SipClient {
         }));
 
         // Perform initial registration (after endpoint.serve() is running)
-        let mut reg = Registration::new(endpoint_inner.clone(), Some(credential.clone()));
-        reg.call_id = rsip::headers::CallId::from(Uuid::new_v4().to_string());
+        let mut reg = registration::create_registration(endpoint_inner.clone(), Some(credential.clone()));
         let initial_expires = registration::register_once(&mut reg, server_uri.clone()).await?;
 
         // Emit registration success event

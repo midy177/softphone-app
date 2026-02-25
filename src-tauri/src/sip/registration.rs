@@ -1,10 +1,21 @@
+use rsipstack::dialog::authenticate::Credential;
 use rsipstack::dialog::registration::Registration;
+use rsipstack::transaction::endpoint::EndpointInnerRef;
 use rsipstack::Result;
 use std::time::Duration;
 use tokio::select;
 use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
+use uuid::Uuid;
+
+/// Create a Registration instance with a UUID-based Call-ID.
+/// Always use this instead of Registration::new to ensure a proper call_id.
+pub fn create_registration(endpoint: EndpointInnerRef, credential: Option<Credential>) -> Registration {
+    let mut reg = Registration::new(endpoint, credential);
+    reg.call_id = rsip::headers::CallId::from(Uuid::new_v4().to_string());
+    reg
+}
 
 /// Perform a single REGISTER request, returns expires value on success
 pub async fn register_once(registration: &mut Registration, sip_server: rsip::Uri) -> Result<u64> {
