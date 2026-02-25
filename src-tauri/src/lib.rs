@@ -51,124 +51,130 @@ fn get_alsa_card_short_names() -> std::collections::HashMap<u32, String> {
     map
 }
 
-/// Linux-specific: Query PulseAudio/PipeWire for friendly device names.
+/// Linux-specific: Enumerate audio devices using PulseAudio/PipeWire as the primary
+/// source of truth, so that displayed names match GNOME Settings → Sound exactly.
 ///
-/// Returns two maps keyed by ALSA card short name (e.g. "PCH", "Headset"):
-/// - compound key: "PCH:0"  (card_short:dev_num, preferred)
-/// - fallback key: "PCH"    (card_short only, first match wins)
-///
-/// Matching strategy (most → least reliable):
-/// 1. `alsa.card` (numeric index) → look up in /proc/asound/cards → ALSA short name
-/// 2. Fallback: `alsa.card_name` used directly as key
+/// Strategy:
+/// 1. Query PulseAudio/PipeWire sinks (outputs) and sources (inputs) for their
+///    human-readable `description` and ALSA hardware properties (`alsa.card`,
+///    `alsa.device`).
+/// 2. Convert each PA device → candidate cpal device IDs:
+///      alsa.card (index) → /proc/asound/cards → short name → "alsa:plughw:CARD=<short>,DEV=<dev>"
+///    Also try the legacy format without CARD=/DEV= keywords.
+/// 3. Check the candidate IDs against cpal's actual device list; keep the first
+///    match (guarantees the ID is openable by AudioBridge).
+/// 4. If PulseAudio is unavailable or yields no matches, fall back to raw cpal
+///    ALSA enumeration with cpal-supplied descriptions.
 #[cfg(target_os = "linux")]
-fn get_pulse_friendly_names() -> (
-    std::collections::HashMap<String, String>,
-    std::collections::HashMap<String, String>,
-) {
+fn enumerate_audio_devices_linux() -> Result<AudioDevices, String> {
+    use cpal::traits::{DeviceTrait, HostTrait};
     use pulsectl::controllers::{DeviceControl, SinkController, SourceController};
-    use std::collections::HashMap;
     use tracing::{debug, warn};
 
     let card_short_names = get_alsa_card_short_names();
     debug!(cards = ?card_short_names, "ALSA card short names from /proc/asound/cards");
 
-    let mut input_map = HashMap::new();
-    let mut output_map = HashMap::new();
+    let host = cpal::default_host();
 
-    fn insert_device(
-        map: &mut HashMap<String, String>,
-        card: &str,
-        dev: Option<String>,
-        friendly: String,
-    ) {
-        if let Some(ref d) = dev {
-            map.insert(format!("{}:{}", card, d), friendly.clone());
+    // Collect all valid cpal device IDs upfront, split by capability.
+    let (cpal_input_ids, cpal_output_ids) = {
+        let mut ins = std::collections::HashSet::<String>::new();
+        let mut outs = std::collections::HashSet::<String>::new();
+        if let Ok(devs) = host.devices() {
+            for d in devs {
+                if let Ok(id) = d.id() {
+                    let s = id.to_string();
+                    if d.default_input_config().is_ok() { ins.insert(s.clone()); }
+                    if d.default_output_config().is_ok() { outs.insert(s); }
+                }
+            }
         }
-        map.entry(card.to_string()).or_insert(friendly);
-    }
+        (ins, outs)
+    };
+    debug!(inputs = ?cpal_input_ids, outputs = ?cpal_output_ids, "cpal device IDs");
 
-    // Resolve ALSA short name from a PulseAudio device proplist.
-    // Primary: alsa.card (numeric) → /proc/asound/cards short name
-    // Fallback: alsa.card_name string (older PulseAudio / non-PipeWire)
-    macro_rules! resolve_short_name {
-        ($proplist:expr) => {
+    // Build cpal ID candidates from a PulseAudio proplist.
+    // Tries both "alsa:plughw:CARD=<short>,DEV=<dev>" (modern) and
+    // "alsa:plughw:<short>,<dev>" (legacy) so either ALSA naming convention works.
+    macro_rules! pa_cpal_id_candidates {
+        ($proplist:expr) => {{
             $proplist
                 .get_str("alsa.card")
                 .and_then(|s| s.parse::<u32>().ok())
                 .and_then(|n| card_short_names.get(&n).cloned())
-                .or_else(|| $proplist.get_str("alsa.card_name"))
-        };
+                .map(|short| {
+                    let dev = $proplist
+                        .get_str("alsa.device")
+                        .unwrap_or_else(|| "0".to_string());
+                    vec![
+                        format!("alsa:plughw:CARD={},DEV={}", short, dev),
+                        format!("alsa:plughw:{},{}", short, dev),
+                    ]
+                })
+                .unwrap_or_default()
+        }};
     }
 
+    let mut inputs: Vec<AudioDevice> = Vec::new();
+    let mut outputs: Vec<AudioDevice> = Vec::new();
+    let mut pa_produced_results = false;
+
+    // ── PulseAudio sources → input devices ──────────────────────────────────
     match SourceController::create() {
         Ok(mut ctrl) => {
             if let Ok(sources) = ctrl.list_devices() {
                 for src in sources {
-                    if src.monitor.is_some() {
-                        continue;
-                    }
-                    if let Some(short) = resolve_short_name!(src.proplist) {
-                        let dev = src.proplist.get_str("alsa.device");
-                        let friendly = src
-                            .description
-                            .unwrap_or_else(|| src.name.unwrap_or_default());
-                        debug!(card = %short, dev = ?dev, friendly = %friendly, "PulseAudio source");
-                        insert_device(&mut input_map, &short, dev, friendly);
+                    if src.monitor.is_some() { continue; } // skip monitor sources
+                    let candidates = pa_cpal_id_candidates!(src.proplist);
+                    let description = src
+                        .description
+                        .unwrap_or_else(|| src.name.unwrap_or_default());
+                    debug!(description = %description, ?candidates, "PA source");
+                    if let Some(cpal_id) = candidates.iter().find(|id| cpal_input_ids.contains(*id)) {
+                        pa_produced_results = true;
+                        inputs.push(AudioDevice { name: cpal_id.clone(), description });
                     }
                 }
             }
         }
-        Err(e) => warn!(error = %e, "Failed to connect to PulseAudio SourceController"),
+        Err(e) => warn!(error = %e, "PulseAudio SourceController unavailable"),
     }
 
+    // ── PulseAudio sinks → output devices ───────────────────────────────────
     match SinkController::create() {
         Ok(mut ctrl) => {
             if let Ok(sinks) = ctrl.list_devices() {
                 for sink in sinks {
-                    if let Some(short) = resolve_short_name!(sink.proplist) {
-                        let dev = sink.proplist.get_str("alsa.device");
-                        let friendly = sink
-                            .description
-                            .unwrap_or_else(|| sink.name.unwrap_or_default());
-                        debug!(card = %short, dev = ?dev, friendly = %friendly, "PulseAudio sink");
-                        insert_device(&mut output_map, &short, dev, friendly);
+                    let candidates = pa_cpal_id_candidates!(sink.proplist);
+                    let description = sink
+                        .description
+                        .unwrap_or_else(|| sink.name.unwrap_or_default());
+                    debug!(description = %description, ?candidates, "PA sink");
+                    if let Some(cpal_id) = candidates.iter().find(|id| cpal_output_ids.contains(*id)) {
+                        pa_produced_results = true;
+                        outputs.push(AudioDevice { name: cpal_id.clone(), description });
                     }
                 }
             }
         }
-        Err(e) => warn!(error = %e, "Failed to connect to PulseAudio SinkController"),
+        Err(e) => warn!(error = %e, "PulseAudio SinkController unavailable"),
     }
 
-    debug!(
-        input_keys = ?input_map.keys().collect::<Vec<_>>(),
-        output_keys = ?output_map.keys().collect::<Vec<_>>(),
-        "PulseAudio friendly name map loaded"
-    );
+    // ── Fallback: use raw cpal ALSA descriptions ─────────────────────────────
+    if !pa_produced_results {
+        warn!("PulseAudio produced no matching devices; falling back to cpal ALSA names");
+        return enumerate_audio_devices_cpal_fallback(&host);
+    }
 
-    (input_map, output_map)
+    Ok(AudioDevices { inputs, outputs })
 }
 
-/// Extract DEV number from cpal local ID (e.g., "plughw:CARD=PCH,DEV=0" → "0").
+/// Linux-only cpal fallback: enumerate ALSA devices and use cpal-supplied descriptions.
+/// Used when PulseAudio is unavailable (e.g. bare ALSA / headless systems).
 #[cfg(target_os = "linux")]
-fn extract_dev_number(local_id: &str) -> Option<String> {
-    local_id
-        .split("DEV=")
-        .nth(1)
-        .map(|s| s.split(&[',', ':']).next().unwrap_or(s).to_string())
-}
-
-#[tauri::command]
-fn enumerate_audio_devices() -> Result<AudioDevices, String> {
+fn enumerate_audio_devices_cpal_fallback(host: &cpal::Host) -> Result<AudioDevices, String> {
     use cpal::traits::{DeviceTrait, HostTrait};
     use tracing::warn;
-
-    // Enumerate audio devices (no logging)
-
-    // On Linux, get friendly names from PulseAudio/PipeWire
-    #[cfg(target_os = "linux")]
-    let (pulse_input_map, pulse_output_map) = get_pulse_friendly_names();
-
-    let host = cpal::default_host();
 
     let devices = host
         .devices()
@@ -176,108 +182,75 @@ fn enumerate_audio_devices() -> Result<AudioDevices, String> {
 
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
-    let mut _skipped_count = 0;
 
     for device in devices {
         let id = match device.id() {
             Ok(id) => id.to_string(),
-            Err(e) => {
-                warn!(error = ?e, "Failed to get device ID");
-                continue;
-            }
+            Err(e) => { warn!(error = ?e, "Failed to get device ID"); continue; }
         };
+        let local_id = id.split_once(':').map(|(_, r)| r).unwrap_or(&id);
+        if !is_useful_device(local_id) { continue; }
 
-        // Extract the backend-local part of the ID (e.g. "alsa:plughw:CARD=PCH,DEV=0" → "plughw:CARD=PCH,DEV=0")
-        let local_id = id.split_once(':').map(|(_, rest)| rest).unwrap_or(&id);
-
-        // Only keep useful devices, skip ALSA virtual plugins
-        if !is_useful_device(local_id) {
-            _skipped_count += 1;
-            continue;
-        }
-
-        // Get the base description from cpal
-        let cpal_desc = device
+        let desc = device
             .description()
             .map(|d| d.to_string())
             .unwrap_or_else(|_| id.clone());
 
-        // On Linux, resolve friendly name from PulseAudio using the ALSA card short name.
-        // The short name is embedded directly in the cpal device ID:
-        //   "plughw:CARD=PCH,DEV=0"  →  card_short = "PCH", dev_num = "0"
-        // The pulse maps were built with the same short names (via /proc/asound/cards),
-        // so the lookup is exact and does not depend on description string matching.
-        #[cfg(target_os = "linux")]
-        let (input_desc, output_desc) = {
-            if local_id == "default" {
-                (Some(cpal_desc.clone()), Some(cpal_desc))
-            } else if let Some(card_short) = local_id
-                .strip_prefix("plughw:CARD=")
-                .and_then(|s| s.split(',').next())
-            {
-                let dev_num = extract_dev_number(local_id);
-                let compound_key = dev_num.as_ref().map(|d| format!("{}:{}", card_short, d));
-
-                let resolve =
-                    |map: &std::collections::HashMap<String, String>| -> Option<String> {
-                        compound_key
-                            .as_ref()
-                            .and_then(|k| map.get(k))
-                            .or_else(|| map.get(card_short))
-                            .cloned()
-                    };
-
-                (resolve(&pulse_input_map), resolve(&pulse_output_map))
-            } else {
-                (None, None)
-            }
-        };
-
-        #[cfg(not(target_os = "linux"))]
-        let (input_desc, output_desc) = (Some(cpal_desc.clone()), Some(cpal_desc));
-
-        let has_input = device.default_input_config().is_ok();
-        let has_output = device.default_output_config().is_ok();
-
-        if has_input {
-            if let Some(desc) = input_desc {
-                inputs.push(AudioDevice {
-                    name: id.clone(),
-                    description: desc,
-                });
-            }
+        if device.default_input_config().is_ok() {
+            inputs.push(AudioDevice { name: id.clone(), description: desc.clone() });
         }
-        if has_output {
-            if let Some(desc) = output_desc {
-                outputs.push(AudioDevice {
-                    name: id,
-                    description: desc,
-                });
-            }
+        if device.default_output_config().is_ok() {
+            outputs.push(AudioDevice { name: id, description: desc });
         }
     }
-
-    // Only log on error
-    // info!(
-    //     skipped = skipped_count,
-    //     inputs = inputs.len(),
-    //     outputs = outputs.len(),
-    //     "Device enumeration complete"
-    // );
-    // for d in &inputs {
-    //     info!(name = %d.name, desc = %d.description, "Input device");
-    // }
-    // for d in &outputs {
-    //     info!(name = %d.name, desc = %d.description, "Output device");
-    // }
 
     Ok(AudioDevices { inputs, outputs })
 }
 
-/// Filter out ALSA virtual plugins and duplicates, only keep real/useful devices.
-/// Keeps: `default`, `plughw:CARD=<name>` (by card name, not number to deduplicate).
-/// Skips: pipewire, pulse, sysdefault (redundant with default), raw hw:, all virtual plugins.
-/// On non-Linux platforms, accepts all devices.
+#[tauri::command]
+fn enumerate_audio_devices() -> Result<AudioDevices, String> {
+    // On Linux, use PulseAudio/PipeWire as primary source so device names match
+    // GNOME Settings → Sound. Falls back to raw cpal ALSA if PA is unavailable.
+    #[cfg(target_os = "linux")]
+    return enumerate_audio_devices_linux();
+
+    // On macOS / Windows, cpal descriptions are already the correct system names.
+    #[cfg(not(target_os = "linux"))]
+    {
+        use cpal::traits::{DeviceTrait, HostTrait};
+        use tracing::warn;
+
+        let host = cpal::default_host();
+        let devices = host
+            .devices()
+            .map_err(|e| format!("Failed to enumerate devices: {}", e))?;
+
+        let mut inputs = Vec::new();
+        let mut outputs = Vec::new();
+
+        for device in devices {
+            let id = match device.id() {
+                Ok(id) => id.to_string(),
+                Err(e) => { warn!(error = ?e, "Failed to get device ID"); continue; }
+            };
+            let desc = device
+                .description()
+                .map(|d| d.to_string())
+                .unwrap_or_else(|_| id.clone());
+            if device.default_input_config().is_ok() {
+                inputs.push(AudioDevice { name: id.clone(), description: desc.clone() });
+            }
+            if device.default_output_config().is_ok() {
+                outputs.push(AudioDevice { name: id, description: desc });
+            }
+        }
+
+        Ok(AudioDevices { inputs, outputs })
+    }
+}
+
+/// Filter out ALSA virtual plugins and duplicates for the cpal fallback path.
+#[cfg(target_os = "linux")]
 fn is_useful_device(_local_id: &str) -> bool {
     // On macOS/Windows, accept all devices (no filtering needed)
     #[cfg(not(target_os = "linux"))]
@@ -292,11 +265,14 @@ fn is_useful_device(_local_id: &str) -> bool {
             return true;
         }
         if let Some(rest) = _local_id.strip_prefix("plughw:") {
-            // Only keep CARD=<name> form, skip CARD=<number> (duplicate)
+            // Modern format: plughw:CARD=PCH,DEV=0
             if let Some(card_val) = rest.strip_prefix("CARD=") {
                 let card_name = card_val.split(&[',', ':']).next().unwrap_or("");
                 return !card_name.chars().all(|c| c.is_ascii_digit());
             }
+            // Legacy format: plughw:PCH,0
+            let card_name = rest.split(&[',', ':']).next().unwrap_or("");
+            return !card_name.is_empty() && !card_name.chars().all(|c| c.is_ascii_digit());
         }
         false
     }
