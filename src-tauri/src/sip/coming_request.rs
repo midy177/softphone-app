@@ -78,13 +78,18 @@ pub async fn process_incoming_request(
                         continue;
                     }
 
-                    // Extract caller information
+                    // Extract caller information — show only the user part (before @)
                     let caller = tx
                         .original
                         .from_header()
                         .ok()
                         .and_then(|h| h.uri().ok())
-                        .map(|uri| uri.to_string())
+                        .map(|uri| {
+                            uri.auth
+                                .as_ref()
+                                .map(|a| a.user.clone())
+                                .unwrap_or_else(|| uri.to_string())
+                        })
                         .unwrap_or_else(|| "Unknown".to_string());
 
                     let callee = tx
@@ -92,7 +97,12 @@ pub async fn process_incoming_request(
                         .to_header()
                         .ok()
                         .and_then(|h| h.uri().ok())
-                        .map(|uri| uri.to_string());
+                        .map(|uri| {
+                            uri.auth
+                                .as_ref()
+                                .map(|a| a.user.clone())
+                                .unwrap_or_else(|| uri.to_string())
+                        });
 
                     // Extract SDP offer
                     let sdp_offer = String::from_utf8_lossy(&tx.original.body).to_string();
