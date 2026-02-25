@@ -1,13 +1,10 @@
-use rsipstack::dialog::authenticate::Credential;
 use rsipstack::dialog::registration::Registration;
-use rsipstack::transaction::endpoint::EndpointInnerRef;
 use rsipstack::Result;
 use std::time::Duration;
 use tokio::select;
 use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
-use uuid::Uuid;
 
 /// Perform a single REGISTER request, returns expires value on success
 pub async fn register_once(registration: &mut Registration, sip_server: rsip::Uri) -> Result<u64> {
@@ -35,14 +32,11 @@ pub async fn unregister(registration: &mut Registration, sip_server: rsip::Uri) 
 
 /// Background loop that refreshes registration periodically
 pub async fn registration_refresh_loop(
-    endpoint: EndpointInnerRef,
+    mut registration: Registration,
     sip_server: rsip::Uri,
-    credential: Credential,
     initial_expires: u64,
     cancel_token: CancellationToken,
 ) -> Result<()> {
-    let mut registration = Registration::new(endpoint, Some(credential));
-    registration.call_id = rsip::headers::CallId::from(Uuid::new_v4().to_string());
     let refresh_time = initial_expires * 3 / 4;
 
     debug!(server = %sip_server, refresh_in = refresh_time, "Starting registration refresh loop");

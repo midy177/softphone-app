@@ -298,6 +298,7 @@ impl SipClient {
 
         // Perform initial registration (after endpoint.serve() is running)
         let mut reg = Registration::new(endpoint_inner.clone(), Some(credential.clone()));
+        reg.call_id = rsip::headers::CallId::from(Uuid::new_v4().to_string());
         let initial_expires = registration::register_once(&mut reg, server_uri.clone()).await?;
 
         // Emit registration success event
@@ -310,14 +311,12 @@ impl SipClient {
         );
 
         // Task 4: registration refresh loop
-        let cred = credential.clone();
         let srv = server_uri.clone();
         let ct = cancel_token.clone();
         tasks.push(tokio::spawn(async move {
             if let Err(e) = registration::registration_refresh_loop(
-                endpoint_inner,
+                reg,
                 srv,
-                cred,
                 initial_expires,
                 ct,
             )
