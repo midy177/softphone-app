@@ -296,7 +296,7 @@ impl SipClient {
         }));
 
         // Perform initial registration (after endpoint.serve() is running)
-        let mut reg = registration::SipRegistration::new(
+        let mut reg = registration::Registrant::new(
             endpoint_inner.clone(),
             credential.clone(),
             server_uri.clone(),

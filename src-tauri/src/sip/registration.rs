@@ -18,12 +18,12 @@ use uuid::Uuid;
 /// Create once via `SipRegistration::new()`; the UUID-based Call-ID is
 /// generated at construction time and reused for every subsequent request,
 /// as required by RFC 3261.
-pub struct SipRegistration {
+pub struct Registrant {
     inner: Registration,
     sip_server: rsip::Uri,
 }
 
-impl SipRegistration {
+impl Registrant {
     /// Create a new registration manager.
     ///
     /// Initialises the underlying `Registration` with a fresh UUID Call-ID.
