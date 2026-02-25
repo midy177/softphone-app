@@ -48,4 +48,5 @@ nnnoiseless = "0.5.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 pulsectl-rs = "0.3.2"
+libc = "0.2"
 

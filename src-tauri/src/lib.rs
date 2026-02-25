@@ -9,6 +9,35 @@ use tracing::error;
 
 // ── Audio device enumeration via cpal ──
 
+/// Temporarily redirect stderr to /dev/null while `f` runs, then restore it.
+///
+/// cpal probes ALSA, JACK and other Linux audio backends by trying to open every
+/// PCM device it finds. This causes libasound and libjack to print dozens of
+/// harmless-but-noisy messages directly to stderr (bypassing the Rust logging
+/// framework). Redirecting stderr around the enumeration call suppresses that
+/// noise without losing any real application log output.
+#[cfg(target_os = "linux")]
+fn with_suppressed_stderr<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    use libc::{close, dup, dup2, open, O_WRONLY};
+    unsafe {
+        let saved = dup(2);
+        let devnull = open(b"/dev/null\0".as_ptr() as *const libc::c_char, O_WRONLY);
+        if devnull >= 0 {
+            dup2(devnull, 2);
+            close(devnull);
+        }
+        let result = f();
+        if saved >= 0 {
+            dup2(saved, 2);
+            close(saved);
+        }
+        result
+    }
+}
+
 #[derive(serde::Serialize)]
 struct AudioDevice {
     name: String,
@@ -77,7 +106,8 @@ fn enumerate_audio_devices_linux() -> Result<AudioDevices, String> {
     let host = cpal::default_host();
 
     // Collect all valid cpal device IDs upfront, split by capability.
-    let (cpal_input_ids, cpal_output_ids) = {
+    // Wrapped in with_suppressed_stderr to silence ALSA/JACK probe noise.
+    let (cpal_input_ids, cpal_output_ids) = with_suppressed_stderr(|| {
         let mut ins = std::collections::HashSet::<String>::new();
         let mut outs = std::collections::HashSet::<String>::new();
         if let Ok(devs) = host.devices() {
@@ -90,7 +120,7 @@ fn enumerate_audio_devices_linux() -> Result<AudioDevices, String> {
             }
         }
         (ins, outs)
-    };
+    });  // with_suppressed_stderr
     debug!(inputs = ?cpal_input_ids, outputs = ?cpal_output_ids, "cpal device IDs");
 
     // Build cpal ID candidates from a PulseAudio proplist.
@@ -176,33 +206,37 @@ fn enumerate_audio_devices_cpal_fallback(host: &cpal::Host) -> Result<AudioDevic
     use cpal::traits::{DeviceTrait, HostTrait};
     use tracing::warn;
 
-    let devices = host
-        .devices()
-        .map_err(|e| format!("Failed to enumerate devices: {}", e))?;
+    let (mut inputs, mut outputs) = with_suppressed_stderr(|| {
+        let mut inputs = Vec::new();
+        let mut outputs = Vec::new();
 
-    let mut inputs = Vec::new();
-    let mut outputs = Vec::new();
-
-    for device in devices {
-        let id = match device.id() {
-            Ok(id) => id.to_string(),
-            Err(e) => { warn!(error = ?e, "Failed to get device ID"); continue; }
+        let devices = match host.devices() {
+            Ok(d) => d,
+            Err(_) => return (inputs, outputs),
         };
-        let local_id = id.split_once(':').map(|(_, r)| r).unwrap_or(&id);
-        if !is_useful_device(local_id) { continue; }
 
-        let desc = device
-            .description()
-            .map(|d| d.to_string())
-            .unwrap_or_else(|_| id.clone());
+        for device in devices {
+            let id = match device.id() {
+                Ok(id) => id.to_string(),
+                Err(e) => { warn!(error = ?e, "Failed to get device ID"); continue; }
+            };
+            let local_id = id.split_once(':').map(|(_, r)| r).unwrap_or(&id);
+            if !is_useful_device(local_id) { continue; }
 
-        if device.default_input_config().is_ok() {
-            inputs.push(AudioDevice { name: id.clone(), description: desc.clone() });
+            let desc = device
+                .description()
+                .map(|d| d.to_string())
+                .unwrap_or_else(|_| id.clone());
+
+            if device.default_input_config().is_ok() {
+                inputs.push(AudioDevice { name: id.clone(), description: desc.clone() });
+            }
+            if device.default_output_config().is_ok() {
+                outputs.push(AudioDevice { name: id, description: desc });
+            }
         }
-        if device.default_output_config().is_ok() {
-            outputs.push(AudioDevice { name: id, description: desc });
-        }
-    }
+        (inputs, outputs)
+    });
 
     Ok(AudioDevices { inputs, outputs })
 }
