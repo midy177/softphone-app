@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSipRegistration } from '@/composables/useSipRegistration'
 import { useSipCall } from '@/composables/useSipCall'
@@ -16,8 +16,12 @@ const router = useRouter()
 const { isRegistered, currentExtension, unregister } = useSipRegistration()
 const { callState, callee, incomingCall, dial, hangup, answerCall, rejectCall, sendDtmf, audio } = useSipCall()
 
-const phoneNumber = ref('')
+const phoneNumber = ref(sessionStorage.getItem('dialpad-number') ?? '')
 const dtmfInput = ref('')
+
+watch(phoneNumber, (val) => {
+  sessionStorage.setItem('dialpad-number', val)
+})
 
 onMounted(async () => {
   if (!isRegistered.value) {
