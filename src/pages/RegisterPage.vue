@@ -166,7 +166,8 @@ async function handleRegister() {
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center p-4">
+  <div class="h-screen overflow-y-auto">
+    <div class="flex min-h-full items-center justify-center p-4">
     <Card class="w-full max-w-md relative">
       <Button
         variant="ghost"
@@ -301,5 +302,6 @@ async function handleRegister() {
         </form>
       </CardContent>
     </Card>
+    </div>
   </div>
 </template>
