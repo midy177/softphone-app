@@ -691,18 +691,14 @@ pub fn run() {
                 // cancel_token is cancelled, then the window is closed explicitly.
                 api.prevent_close();
                 let app = window.app_handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let state = app.state::<SipAppState>();
-                    if let Some(token) = state.cancel_token.lock().await.take() {
-                        token.cancel();
-                        // Give registration_refresh_loop time to send UNREGISTER.
-                        // 500 ms is sufficient for LAN/fast WAN; the server's
-                        // expires timer handles cleanup if the network is slower.
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    }
-                    state.handle.lock().await.take();
-                    app.exit(0);
-                });
+                let state = app.state::<SipAppState>();
+                if let Some(token) = state.cancel_token.blocking_lock().take() {
+                    token.cancel();
+                    // Give registration_refresh_loop time to send UNREGISTER.
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                state.handle.blocking_lock().take();
+                app.exit(0);
             }
         })
         .run(tauri::generate_context!())
