@@ -691,7 +691,6 @@ pub fn run() {
                 // cancel_token is cancelled, then the window is closed explicitly.
                 api.prevent_close();
                 let app = window.app_handle().clone();
-                let win = window.clone();
                 tauri::async_runtime::spawn(async move {
                     let state = app.state::<SipAppState>();
                     if let Some(token) = state.cancel_token.lock().await.take() {
@@ -702,7 +701,7 @@ pub fn run() {
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                     }
                     state.handle.lock().await.take();
-                    let _ = win.close();
+                    app.exit(0);
                 });
             }
         })
