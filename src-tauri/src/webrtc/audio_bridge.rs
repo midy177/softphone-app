@@ -45,13 +45,40 @@ impl AudioBridge {
             find_device_by_id(&host, name)?
         } else {
             host.default_input_device()
-                .ok_or_else(|| "No default input device".to_string())?
+                .ok_or_else(|| "No microphone found. Please connect a microphone and try again.".to_string())?
         };
 
-        // Validate output device exists
-        if let Some(name) = output_device_name {
-            find_device_by_id(&host, name)?;
-        }
+        // Validate the input device is actually accessible and can provide a config.
+        // This catches missing microphone permission and devices that exist but cannot be opened.
+        input_device.default_input_config().map_err(|_| {
+            #[cfg(target_os = "macos")]
+            {
+                "Microphone unavailable: no microphone connected, or microphone permission not granted (System Settings → Privacy & Security → Microphone).".to_string()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                "Microphone unavailable: no microphone detected. Please check that a microphone is connected.".to_string()
+            }
+        })?;
+
+        // Validate output device exists and is accessible
+        let output_device = if let Some(name) = output_device_name {
+            find_device_by_id(&host, name)?
+        } else {
+            host.default_output_device()
+                .ok_or_else(|| "No speaker or audio output device found. Please connect one and try again.".to_string())?
+        };
+
+        output_device.default_output_config().map_err(|_| {
+            #[cfg(target_os = "macos")]
+            {
+                "Speaker unavailable: no audio output device connected, or audio permission not granted (System Settings → Privacy & Security).".to_string()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                "Speaker unavailable: no audio output device detected. Please check that a speaker or headset is connected.".to_string()
+            }
+        })?;
 
         let input_desc = input_device
             .description()

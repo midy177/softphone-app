@@ -353,7 +353,7 @@ async fn sip_make_call(state: State<'_, SipAppState>, callee: String) -> Result<
         .await
         .map_err(|e| {
             error!(error = ?e, "Make call failed");
-            format!("Call failed: {}", e)
+            e.to_string().trim_start_matches("Error: ").to_string()
         })
 }
 

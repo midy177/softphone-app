@@ -100,7 +100,7 @@ async fn try_call_with_mode(
         prefer_srtp,
     )
     .await
-    .map_err(|e| Error::Error(format!("WebRTC session creation failed: {}", e)))?;
+    .map_err(|e| Error::Error(e))?;
 
     debug!(
         call_id = %call_id,

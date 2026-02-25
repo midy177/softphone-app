@@ -110,7 +110,7 @@ const callStateLabel: Record<string, string> = {
 </script>
 
 <template>
-  <div class="h-screen overflow-y-auto">
+  <div class="h-screen flex flex-col overflow-hidden">
     <!-- Incoming Call Dialog -->
     <IncomingCallDialog
       :open="callState === 'incoming' && !!incomingCall"
@@ -120,7 +120,7 @@ const callStateLabel: Record<string, string> = {
       @reject="handleReject"
     />
 
-    <Card class="w-full border-0 shadow-none bg-transparent backdrop-blur-md rounded-none">
+    <Card class="w-full border-0 shadow-none bg-transparent backdrop-blur-md rounded-none flex-1 min-h-0">
       <CardHeader v-if="callState !== 'connected'" class="pb-0">
         <div class="flex items-center justify-between">
           <CardTitle class="text-lg font-bold">拨号面板</CardTitle>
@@ -138,7 +138,7 @@ const callStateLabel: Record<string, string> = {
         </div>
       </CardHeader>
 
-      <CardContent :class="callState === 'connected' ? 'space-y-2 pt-4' : 'space-y-3'">
+      <CardContent class="flex-1 flex flex-col min-h-0" :class="callState === 'connected' ? 'space-y-2 pt-4' : 'space-y-3'">
         <!-- Phone number input -->
         <div v-if="callState === 'idle'" class="relative">
           <Input
@@ -186,7 +186,7 @@ const callStateLabel: Record<string, string> = {
         <!-- Call state indicator -->
         <div
           v-if="callState !== 'idle' && callState !== 'connected'"
-          class="flex flex-col items-center justify-center gap-6 h-[calc(100vh-80px)]"
+          class="flex flex-col items-center justify-center gap-6 flex-1"
         >
           <p class="text-lg font-medium">
             {{ callStateLabel[callState] || callState }}
