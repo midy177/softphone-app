@@ -36,9 +36,10 @@ export async function restoreSipFlowConfig() {
             enabled: parsed.enabled,
             log_dir: parsed.log_dir,
           },
-          prefer_srtp: true, // 默认值
-          noise_reduce: false, // 默认值
-          speaker_noise_reduce: false, // 默认值
+          prefer_srtp: true,
+          noise_reduce: false,
+          speaker_noise_reduce: false,
+          always_on_top: false,
         }
         // 保存到新格式
         saveAppConfig(config)
@@ -110,6 +111,7 @@ export function saveSipFlowConfig(config: { enabled: boolean; log_dir: string })
     prefer_srtp: true,
     noise_reduce: false,
     speaker_noise_reduce: false,
+    always_on_top: false,
   }
   appConfig.sip_flow = config
   saveAppConfig(appConfig)

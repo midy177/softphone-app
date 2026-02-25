@@ -6,7 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useSipRegistration } from '@/composables/useSipRegistration'
 import { useAudio } from '@/composables/useAudio'
-import { getSavedSipFlowConfig, saveSipFlowConfig, getAppConfig, saveAppConfig } from '@/utils/configManager'
+import { getAppConfig, saveAppConfig } from '@/utils/configManager'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -74,6 +74,7 @@ async function toggleSipFlow() {
       prefer_srtp: preferSrtp.value,
       noise_reduce: noiseReduce.value,
       speaker_noise_reduce: speakerNoiseReduce.value,
+      always_on_top: alwaysOnTop.value,
     }
     config.sip_flow.enabled = newEnabled
     saveAppConfig(config)
@@ -155,6 +156,7 @@ async function toggleNoiseReduce() {
       prefer_srtp: preferSrtp.value,
       noise_reduce: newEnabled,
       speaker_noise_reduce: speakerNoiseReduce.value,
+      always_on_top: alwaysOnTop.value,
     }
     config.noise_reduce = newEnabled
     saveAppConfig(config)
@@ -180,6 +182,7 @@ async function toggleSpeakerNoiseReduce() {
       prefer_srtp: preferSrtp.value,
       noise_reduce: noiseReduce.value,
       speaker_noise_reduce: newEnabled,
+      always_on_top: alwaysOnTop.value,
     }
     config.speaker_noise_reduce = newEnabled
     saveAppConfig(config)
@@ -231,6 +234,7 @@ async function toggleSrtp() {
       prefer_srtp: newEnabled,
       noise_reduce: noiseReduce.value,
       speaker_noise_reduce: speakerNoiseReduce.value,
+      always_on_top: alwaysOnTop.value,
     }
     config.prefer_srtp = newEnabled
     saveAppConfig(config)
@@ -265,6 +269,7 @@ async function selectLogFolder() {
         prefer_srtp: preferSrtp.value,
         noise_reduce: noiseReduce.value,
         speaker_noise_reduce: speakerNoiseReduce.value,
+        always_on_top: alwaysOnTop.value,
       }
       config.sip_flow.log_dir = selected
       saveAppConfig(config)
