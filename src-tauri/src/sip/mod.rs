@@ -1,5 +1,5 @@
 use crate::sip::helpers::{
-    create_transport_connection, extract_protocol_from_uri, get_first_non_loopback_interface,
+    create_transport_connection, extract_protocol_from_uri, get_local_outbound_ip,
 };
 use crate::sip::message_inspector::SipFlow;
 use crate::sip::state::{ActiveCall, PendingCall, SipClientHandle};
@@ -94,8 +94,8 @@ impl SipClient {
 
         let cancel_token = CancellationToken::new();
 
-        // Get local IP
-        let local_ip = get_first_non_loopback_interface()?;
+        // Get local IP — probe the OS routing table to find the actual egress interface
+        let local_ip = get_local_outbound_ip(&format!("{}", server_uri.host_with_port))?;
         debug!(ip = %local_ip, "Detected local outbound IP");
 
         // Create transport layer

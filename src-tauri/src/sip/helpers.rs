@@ -248,7 +248,44 @@ async fn create_websocket_connection(
     })
 }
 
-pub fn get_first_non_loopback_interface() -> rsipstack::Result<IpAddr> {
+/// Determine the local outbound IP address by consulting the OS routing table.
+///
+/// Opens a UDP socket and "connects" it to the SIP server. No packets are sent —
+/// UDP connect is a local operation that causes the OS to choose the correct egress
+/// interface. The resulting `local_addr()` is the IP the kernel would actually use
+/// to reach the server (respects VPN, multiple NICs, policy routing, etc.).
+///
+/// `server_addr` may be "host:port" or just "host" (port defaults to 5060).
+///
+/// Falls back to the first non-loopback IPv4 interface if routing probe fails.
+pub fn get_local_outbound_ip(server_addr: &str) -> rsipstack::Result<IpAddr> {
+    use std::net::UdpSocket;
+
+    let target = if server_addr.contains(':') {
+        server_addr.to_string()
+    } else {
+        format!("{}:5060", server_addr)
+    };
+
+    match UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| s.connect(&target).map(|_| s))
+        .and_then(|s| s.local_addr())
+    {
+        Ok(addr) => {
+            tracing::debug!(ip = %addr.ip(), server = %target, "Detected local outbound IP via routing");
+            Ok(addr.ip())
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e, server = %target,
+                "UDP routing probe failed; falling back to interface enumeration"
+            );
+            get_first_non_loopback_interface()
+        }
+    }
+}
+
+fn get_first_non_loopback_interface() -> rsipstack::Result<IpAddr> {
     for i in get_if_addrs::get_if_addrs()? {
         if !i.is_loopback() {
             match i.addr {
@@ -257,5 +294,5 @@ pub fn get_first_non_loopback_interface() -> rsipstack::Result<IpAddr> {
             }
         }
     }
-    Err(Error::Error("No IPV4 interface found".to_string()))
+    Err(Error::Error("No IPv4 interface found".to_string()))
 }
