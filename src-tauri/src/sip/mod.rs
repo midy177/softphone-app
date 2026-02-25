@@ -296,8 +296,12 @@ impl SipClient {
         }));
 
         // Perform initial registration (after endpoint.serve() is running)
-        let mut reg = registration::create_registration(endpoint_inner.clone(), Some(credential.clone()));
-        let initial_expires = registration::register_once(&mut reg, server_uri.clone()).await?;
+        let mut reg = registration::SipRegistration::new(
+            endpoint_inner.clone(),
+            credential.clone(),
+            server_uri.clone(),
+        );
+        let initial_expires = reg.register_once().await?;
 
         // Emit registration success event
         let _ = app_handle.emit(
@@ -309,17 +313,9 @@ impl SipClient {
         );
 
         // Task 4: registration refresh loop
-        let srv = server_uri.clone();
         let ct = cancel_token.clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(e) = registration::registration_refresh_loop(
-                reg,
-                srv,
-                initial_expires,
-                ct,
-            )
-            .await
-            {
+            if let Err(e) = reg.run_refresh_loop(initial_expires, ct).await {
                 error!(error = ?e, "Registration refresh loop error");
             }
         }));
