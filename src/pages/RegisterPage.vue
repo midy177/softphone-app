@@ -49,7 +49,7 @@ const { isRegistered, isRegistering, checkRegistered, register } = useSipRegistr
 
 onMounted(async () => {
   if (await checkRegistered()) {
-    router.push('/dialpad')
+    await router.push('/dialpad')
   }
 })
 
@@ -144,7 +144,7 @@ function buildSipUri(host: string, port: string, transport: string): string {
 
 async function handleRegister() {
   if (isRegistered.value) {
-    router.push('/dialpad')
+    await router.push('/dialpad')
     return
   }
   if (!validate()) return
@@ -158,7 +158,7 @@ async function handleRegister() {
 
   try {
     await register(server, username.value.trim(), password.value, outboundProxy)
-    router.push('/dialpad')
+    await router.push('/dialpad')
   } catch (e) {
     toast.error(`注册失败: ${e}`)
   }

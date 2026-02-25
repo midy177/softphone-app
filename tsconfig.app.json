@@ -15,6 +15,9 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@tauri-apps/plugin-dialog": [
+        "./node_modules/@tauri-apps/plugin-dialog/dist-js/index"
       ]
     }
   },
