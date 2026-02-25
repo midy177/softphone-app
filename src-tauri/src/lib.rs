@@ -379,7 +379,7 @@ async fn sip_make_call(state: State<'_, SipAppState>, callee: String) -> Result<
     let noise_reduce = *state.noise_reduce.lock().await;
     let speaker_noise_reduce = *state.speaker_noise_reduce.lock().await;
 
-    // Clone Arc<SipClientHandle> and release the lock immediately
+    // Clone Arc<ClientHandle> and release the lock immediately
     // so that sip_hangup can also acquire the lock concurrently
     let handle = {
         let handle_guard = state.handle.lock().await;
@@ -612,13 +612,13 @@ async fn set_sip_flow_dir(state: State<'_, SipAppState>, dir: String) -> Result<
 #[tauri::command]
 async fn get_sip_flow_config(
     state: State<'_, SipAppState>,
-) -> Result<sip::state::SipFlowConfig, String> {
+) -> Result<sip::state::FlowConfig, String> {
     // Prefer live state from the registered handle when available
     let handle_guard = state.handle.lock().await;
     if let Some(handle) = handle_guard.as_ref() {
         let enabled = sip::handle_is_sip_flow_enabled(handle)?;
         let log_dir = sip::handle_get_sip_flow_dir(handle)?;
-        Ok(sip::state::SipFlowConfig { enabled, log_dir })
+        Ok(sip::state::FlowConfig { enabled, log_dir })
     } else {
         // Otherwise return the stored config
         Ok(state.sip_flow_config.lock().await.clone())
@@ -654,7 +654,7 @@ pub fn run() {
             cancel_token: tokio::sync::Mutex::new(None),
             input_device: tokio::sync::Mutex::new(None),
             output_device: tokio::sync::Mutex::new(None),
-            sip_flow_config: tokio::sync::Mutex::new(sip::state::SipFlowConfig::default()),
+            sip_flow_config: tokio::sync::Mutex::new(sip::state::FlowConfig::default()),
             prefer_srtp: tokio::sync::Mutex::new(true), // default: prefer SRTP
             noise_reduce: tokio::sync::Mutex::new(false), // default: noise reduction disabled
             speaker_noise_reduce: tokio::sync::Mutex::new(false), // default: speaker noise reduction disabled

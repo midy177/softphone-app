@@ -13,12 +13,12 @@ use crate::webrtc::WebRtcSession;
 
 /// SIP flow log configuration
 #[derive(Clone, Serialize)]
-pub struct SipFlowConfig {
+pub struct FlowConfig {
     pub enabled: bool,
     pub log_dir: String,
 }
 
-impl Default for SipFlowConfig {
+impl Default for FlowConfig {
     fn default() -> Self {
         // Default to $HOME/softphone/
         let log_dir = if let Some(home) = std::env::var_os("HOME") {
@@ -40,17 +40,17 @@ impl Default for SipFlowConfig {
 }
 
 pub struct SipAppState {
-    pub handle: tokio::sync::Mutex<Option<Arc<SipClientHandle>>>,
+    pub handle: tokio::sync::Mutex<Option<Arc<ClientHandle>>>,
     pub cancel_token: tokio::sync::Mutex<Option<CancellationToken>>,
     pub input_device: tokio::sync::Mutex<Option<String>>,
     pub output_device: tokio::sync::Mutex<Option<String>>,
-    pub sip_flow_config: tokio::sync::Mutex<SipFlowConfig>,
+    pub sip_flow_config: tokio::sync::Mutex<FlowConfig>,
     pub prefer_srtp: tokio::sync::Mutex<bool>,
     pub noise_reduce: tokio::sync::Mutex<bool>,
     pub speaker_noise_reduce: tokio::sync::Mutex<bool>,
 }
 
-pub struct SipClientHandle {
+pub struct ClientHandle {
     pub app_handle: tauri::AppHandle,
     pub dialog_layer: Arc<DialogLayer>,
     pub state_sender: DialogStateSender,

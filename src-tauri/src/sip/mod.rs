@@ -2,7 +2,7 @@ use crate::sip::helpers::{
     create_transport_connection, extract_protocol_from_uri, get_local_outbound_ip,
 };
 use crate::sip::message_inspector::SipFlow;
-use crate::sip::state::{ActiveCall, PendingCall, SipClientHandle};
+use crate::sip::state::{ActiveCall, PendingCall, ClientHandle};
 use dashmap::DashMap;
 use rsip::Uri;
 use rsipstack::dialog::authenticate::Credential;
@@ -44,7 +44,7 @@ impl Client {
         outbound_proxy: Option<String>,
         enable_sip_flow: Option<bool>,
         sip_flow_log_dir: Option<String>,
-    ) -> rsipstack::Result<(SipClientHandle, CancellationToken)> {
+    ) -> rsipstack::Result<(ClientHandle, CancellationToken)> {
         // Parse server URI - support both SIP URI (sip:host) and WebSocket URL (ws://host/path)
         let (server_uri, ws_path) = if server.starts_with("ws://") || server.starts_with("wss://") {
             let is_wss = server.starts_with("wss://");
@@ -321,7 +321,7 @@ impl Client {
         }));
 
         Ok((
-            SipClientHandle {
+            ClientHandle {
                 app_handle,
                 dialog_layer,
                 state_sender,
@@ -339,9 +339,9 @@ impl Client {
     }
 }
 
-/// Make an outbound call using the SipClientHandle
+/// Make an outbound call using the ClientHandle
 pub async fn handle_make_call(
-    handle: &SipClientHandle,
+    handle: &ClientHandle,
     callee: String,
     input_device: Option<String>,
     output_device: Option<String>,
@@ -471,7 +471,7 @@ pub async fn handle_make_call(
 }
 
 /// Hang up the active call
-pub async fn handle_hangup(handle: &SipClientHandle) -> rsipstack::Result<()> {
+pub async fn handle_hangup(handle: &ClientHandle) -> rsipstack::Result<()> {
     let mut active = handle.active_call.lock().await;
     if let Some(mut call) = active.take() {
         info!(call_id = %call.call_id, "Hanging up call");
@@ -529,7 +529,7 @@ pub async fn handle_hangup(handle: &SipClientHandle) -> rsipstack::Result<()> {
 }
 
 /// Toggle mic mute for the active call
-pub async fn handle_toggle_mic_mute(handle: &SipClientHandle) -> Result<bool, String> {
+pub async fn handle_toggle_mic_mute(handle: &ClientHandle) -> Result<bool, String> {
     let active = handle.active_call.lock().await;
     if let Some(ref call) = *active {
         if let Some(ref session) = call.webrtc_session {
@@ -543,7 +543,7 @@ pub async fn handle_toggle_mic_mute(handle: &SipClientHandle) -> Result<bool, St
 }
 
 /// Set microphone noise reduction for the active call (if any)
-pub async fn handle_set_noise_reduce(handle: &SipClientHandle, enabled: bool) {
+pub async fn handle_set_noise_reduce(handle: &ClientHandle, enabled: bool) {
     let active = handle.active_call.lock().await;
     if let Some(ref call) = *active {
         if let Some(ref session) = call.webrtc_session {
@@ -553,7 +553,7 @@ pub async fn handle_set_noise_reduce(handle: &SipClientHandle, enabled: bool) {
 }
 
 /// Set speaker noise reduction for the active call (if any)
-pub async fn handle_set_speaker_noise_reduce(handle: &SipClientHandle, enabled: bool) {
+pub async fn handle_set_speaker_noise_reduce(handle: &ClientHandle, enabled: bool) {
     let active = handle.active_call.lock().await;
     if let Some(ref call) = *active {
         if let Some(ref session) = call.webrtc_session {
@@ -563,7 +563,7 @@ pub async fn handle_set_speaker_noise_reduce(handle: &SipClientHandle, enabled: 
 }
 
 /// Toggle microphone noise reduction for the active call
-pub async fn handle_toggle_noise_reduce(handle: &SipClientHandle) -> Result<bool, String> {
+pub async fn handle_toggle_noise_reduce(handle: &ClientHandle) -> Result<bool, String> {
     let active = handle.active_call.lock().await;
     if let Some(ref call) = *active {
         if let Some(ref session) = call.webrtc_session {
@@ -577,7 +577,7 @@ pub async fn handle_toggle_noise_reduce(handle: &SipClientHandle) -> Result<bool
 }
 
 /// Toggle speaker mute for the active call
-pub async fn handle_toggle_speaker_mute(handle: &SipClientHandle) -> Result<bool, String> {
+pub async fn handle_toggle_speaker_mute(handle: &ClientHandle) -> Result<bool, String> {
     let active = handle.active_call.lock().await;
     if let Some(ref call) = *active {
         if let Some(ref session) = call.webrtc_session {
@@ -592,7 +592,7 @@ pub async fn handle_toggle_speaker_mute(handle: &SipClientHandle) -> Result<bool
 
 /// Answer an incoming call
 pub async fn handle_answer_call(
-    handle: &SipClientHandle,
+    handle: &ClientHandle,
     call_id: String,
     input_device: Option<String>,
     output_device: Option<String>,
@@ -713,7 +713,7 @@ pub async fn handle_answer_call(
 
 /// Reject an incoming call
 pub async fn handle_reject_call(
-    handle: &SipClientHandle,
+    handle: &ClientHandle,
     call_id: String,
     reason_code: Option<u16>,
 ) -> rsipstack::Result<()> {
@@ -764,7 +764,7 @@ pub async fn handle_reject_call(
 }
 
 /// Send DTMF digit during active call
-pub async fn handle_send_dtmf(handle: &SipClientHandle, digit: String) -> Result<(), String> {
+pub async fn handle_send_dtmf(handle: &ClientHandle, digit: String) -> Result<(), String> {
     let digit_char = digit
         .chars()
         .next()
@@ -785,7 +785,7 @@ pub async fn handle_send_dtmf(handle: &SipClientHandle, digit: String) -> Result
 }
 
 /// Enable SIP message flow logging
-pub fn handle_enable_sip_flow(handle: &SipClientHandle) -> Result<(), String> {
+pub fn handle_enable_sip_flow(handle: &ClientHandle) -> Result<(), String> {
     if let Some(ref sip_flow) = handle.sip_flow {
         sip_flow.enable();
         Ok(())
@@ -795,7 +795,7 @@ pub fn handle_enable_sip_flow(handle: &SipClientHandle) -> Result<(), String> {
 }
 
 /// Disable SIP message flow logging
-pub fn handle_disable_sip_flow(handle: &SipClientHandle) -> Result<(), String> {
+pub fn handle_disable_sip_flow(handle: &ClientHandle) -> Result<(), String> {
     if let Some(ref sip_flow) = handle.sip_flow {
         sip_flow.disable();
         Ok(())
@@ -805,7 +805,7 @@ pub fn handle_disable_sip_flow(handle: &SipClientHandle) -> Result<(), String> {
 }
 
 /// Check if SIP message flow logging is enabled
-pub fn handle_is_sip_flow_enabled(handle: &SipClientHandle) -> Result<bool, String> {
+pub fn handle_is_sip_flow_enabled(handle: &ClientHandle) -> Result<bool, String> {
     if let Some(ref sip_flow) = handle.sip_flow {
         Ok(sip_flow.is_enabled())
     } else {
@@ -814,7 +814,7 @@ pub fn handle_is_sip_flow_enabled(handle: &SipClientHandle) -> Result<bool, Stri
 }
 
 /// Set SIP flow log directory
-pub fn handle_set_sip_flow_dir(handle: &SipClientHandle, dir: String) -> Result<(), String> {
+pub fn handle_set_sip_flow_dir(handle: &ClientHandle, dir: String) -> Result<(), String> {
     if let Some(ref sip_flow) = handle.sip_flow {
         sip_flow.set_log_dir(std::path::PathBuf::from(dir))
     } else {
@@ -823,7 +823,7 @@ pub fn handle_set_sip_flow_dir(handle: &SipClientHandle, dir: String) -> Result<
 }
 
 /// Get SIP flow log directory
-pub fn handle_get_sip_flow_dir(handle: &SipClientHandle) -> Result<String, String> {
+pub fn handle_get_sip_flow_dir(handle: &ClientHandle) -> Result<String, String> {
     if let Some(ref sip_flow) = handle.sip_flow {
         Ok(sip_flow.get_log_dir().to_string_lossy().to_string())
     } else {
