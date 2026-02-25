@@ -90,14 +90,15 @@ fn get_pulse_friendly_names() -> (
     // Resolve ALSA short name from a PulseAudio device proplist.
     // Primary: alsa.card (numeric) → /proc/asound/cards short name
     // Fallback: alsa.card_name string (older PulseAudio / non-PipeWire)
-    let resolve_short_name =
-        |proplist: &pulsectl::controllers::types::PropList| -> Option<String> {
-            proplist
+    macro_rules! resolve_short_name {
+        ($proplist:expr) => {
+            $proplist
                 .get_str("alsa.card")
                 .and_then(|s| s.parse::<u32>().ok())
                 .and_then(|n| card_short_names.get(&n).cloned())
-                .or_else(|| proplist.get_str("alsa.card_name"))
+                .or_else(|| $proplist.get_str("alsa.card_name"))
         };
+    }
 
     match SourceController::create() {
         Ok(mut ctrl) => {
@@ -106,7 +107,7 @@ fn get_pulse_friendly_names() -> (
                     if src.monitor.is_some() {
                         continue;
                     }
-                    if let Some(short) = resolve_short_name(&src.proplist) {
+                    if let Some(short) = resolve_short_name!(src.proplist) {
                         let dev = src.proplist.get_str("alsa.device");
                         let friendly = src
                             .description
@@ -124,7 +125,7 @@ fn get_pulse_friendly_names() -> (
         Ok(mut ctrl) => {
             if let Ok(sinks) = ctrl.list_devices() {
                 for sink in sinks {
-                    if let Some(short) = resolve_short_name(&sink.proplist) {
+                    if let Some(short) = resolve_short_name!(sink.proplist) {
                         let dev = sink.proplist.get_str("alsa.device");
                         let friendly = sink
                             .description
