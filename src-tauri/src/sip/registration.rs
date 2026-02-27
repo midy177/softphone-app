@@ -61,15 +61,33 @@ impl Registrant {
 
     /// Run the periodic refresh loop.
     ///
-    /// Refreshes at 75% of the current expires interval.
+    /// Refreshes at 75% of the current expires interval, capped at
+    /// `max_keepalive_secs` when set.  For connection-oriented transports
+    /// (TCP/TLS/WS/WSS) pass a value such as `Some(25)`: rsipstack does not
+    /// auto-remove dead connections from its send map, so the only reliable
+    /// way to prevent a stale-connection send error is to keep the TCP
+    /// session alive with periodic REGISTER traffic before the server idles
+    /// it out.
+    ///
     /// Sends an unregister on cancellation before returning.
     pub async fn run_refresh_loop(
         mut self,
         initial_expires: u64,
         cancel_token: CancellationToken,
+        max_keepalive_secs: Option<u64>,
     ) -> Result<()> {
-        let refresh_time = initial_expires * 3 / 4;
-        debug!(server = %self.sip_server, refresh_in = refresh_time, "Starting registration refresh loop");
+        let cap = |t: u64| match max_keepalive_secs {
+            Some(max) => t.min(max),
+            None => t,
+        };
+
+        let refresh_time = cap(initial_expires * 3 / 4);
+        debug!(
+            server = %self.sip_server,
+            refresh_in = refresh_time,
+            max_keepalive = ?max_keepalive_secs,
+            "Starting registration refresh loop"
+        );
 
         let mut ticker = interval(Duration::from_secs(refresh_time));
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -86,7 +104,7 @@ impl Registrant {
                     ticker.tick().await;
                     match self.register_once().await {
                         Ok(expires) => {
-                            let new_refresh = expires * 3 / 4;
+                            let new_refresh = cap(expires * 3 / 4);
                             ticker.reset_after(Duration::from_secs(new_refresh));
                             debug!(server = %self.sip_server, refresh_in = new_refresh, "Registration refreshed");
                         }

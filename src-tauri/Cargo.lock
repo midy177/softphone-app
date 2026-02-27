@@ -5006,7 +5006,7 @@ dependencies = [
 
 [[package]]
 name = "softphone-app"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "audio-codec",
  "audioadapter-buffers",

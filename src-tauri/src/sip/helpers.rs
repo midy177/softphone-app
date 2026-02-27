@@ -272,7 +272,7 @@ pub fn get_local_outbound_ip(server_addr: &str) -> rsipstack::Result<IpAddr> {
         .and_then(|s| s.local_addr())
     {
         Ok(addr) => {
-            tracing::debug!(ip = %addr.ip(), server = %target, "Detected local outbound IP via routing");
+            debug!(ip = %addr.ip(), server = %target, "Detected local outbound IP via routing");
             Ok(addr.ip())
         }
         Err(e) => {

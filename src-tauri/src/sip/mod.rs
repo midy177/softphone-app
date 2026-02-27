@@ -312,10 +312,25 @@ impl Client {
             },
         );
 
-        // Task 4: registration refresh loop
+        // Task 4: registration refresh loop.
+        // For connection-oriented transports (TCP/TLS/WS/WSS), cap the
+        // refresh interval at 25 s so the TCP session is kept alive by
+        // periodic REGISTER traffic.  rsipstack never auto-removes dead
+        // connections from its send map, so the only reliable protection
+        // against "socket already shut down" (OS 10058) on the first outbound
+        // INVITE is to prevent the server from closing the TCP connection in
+        // the first place.
+        let tcp_keepalive = match protocol {
+            helpers::Protocol::Tcp
+            | helpers::Protocol::Tls
+            | helpers::Protocol::TlsSctp
+            | helpers::Protocol::Ws
+            | helpers::Protocol::Wss => Some(25u64),
+            helpers::Protocol::Udp | helpers::Protocol::Sctp => None,
+        };
         let ct = cancel_token.clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(e) = reg.run_refresh_loop(initial_expires, ct).await {
+            if let Err(e) = reg.run_refresh_loop(initial_expires, ct, tcp_keepalive).await {
                 error!(error = ?e, "Registration refresh loop error");
             }
         }));
